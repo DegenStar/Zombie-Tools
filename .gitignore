@@ -1,5 +1,5 @@
 *test*
 __pycache__/
-test/
+tests/
 .agent/
 .codex/
