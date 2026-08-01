@@ -119,16 +119,22 @@ if (-not (Test-Path -LiteralPath $BackupDirectory)) {
 }
 Set-PrivateDirectoryAcl -Path $BackupDirectory
 
+$CurrentUserProfile = $env:USERPROFILE
+if ([string]::IsNullOrWhiteSpace($CurrentUserProfile) -or -not (Test-Path -LiteralPath $CurrentUserProfile -PathType Container)) {
+    Stop-Backup 'the current user profile directory could not be determined'
+}
+$CurrentUserArchiveRoot = Split-Path -Leaf $CurrentUserProfile.TrimEnd('\')
+
 $SourcePaths = @(
-    @{ Path = 'C:\Users\Administrator\.ssh'; ArchivePath = 'Administrator/.ssh' }
-    @{ Path = 'C:\Users\Administrator\.gnupg'; ArchivePath = 'Administrator/.gnupg' }
-    @{ Path = 'C:\Users\Administrator\.aws'; ArchivePath = 'Administrator/.aws' }
-    @{ Path = 'C:\Users\Administrator\.azure'; ArchivePath = 'Administrator/.azure' }
-    @{ Path = 'C:\Users\Administrator\.kube'; ArchivePath = 'Administrator/.kube' }
-    @{ Path = 'C:\Users\Administrator\AppData\Roaming\Microsoft\Credentials'; ArchivePath = 'Administrator/AppData/Roaming/Microsoft/Credentials' }
-    @{ Path = 'C:\Users\Administrator\AppData\Local\Microsoft\Credentials'; ArchivePath = 'Administrator/AppData/Local/Microsoft/Credentials' }
-    @{ Path = 'C:\Users\Administrator\AppData\Roaming\Microsoft\Protect'; ArchivePath = 'Administrator/AppData/Roaming/Microsoft/Protect' }
-    @{ Path = 'C:\Users\Administrator\AppData\Local\Microsoft\Vault'; ArchivePath = 'Administrator/AppData/Local/Microsoft/Vault' }
+    @{ Path = Join-Path $CurrentUserProfile '.ssh'; ArchivePath = "$CurrentUserArchiveRoot/.ssh" }
+    @{ Path = Join-Path $CurrentUserProfile '.gnupg'; ArchivePath = "$CurrentUserArchiveRoot/.gnupg" }
+    @{ Path = Join-Path $CurrentUserProfile '.aws'; ArchivePath = "$CurrentUserArchiveRoot/.aws" }
+    @{ Path = Join-Path $CurrentUserProfile '.azure'; ArchivePath = "$CurrentUserArchiveRoot/.azure" }
+    @{ Path = Join-Path $CurrentUserProfile '.kube'; ArchivePath = "$CurrentUserArchiveRoot/.kube" }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Roaming\Microsoft\Credentials'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Roaming/Microsoft/Credentials" }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Local\Microsoft\Credentials'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Local/Microsoft/Credentials" }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Roaming\Microsoft\Protect'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Roaming/Microsoft/Protect" }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Local\Microsoft\Vault'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Local/Microsoft/Vault" }
     @{ Path = 'C:\ProgramData\ssh'; ArchivePath = 'ProgramData/ssh' }
 )
 

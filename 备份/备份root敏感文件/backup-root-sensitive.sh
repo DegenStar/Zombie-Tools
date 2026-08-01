@@ -61,6 +61,16 @@ esac
 [ "$(id -u)" -eq 0 ] || die 'this script must run as root (for example: sudo ./backup-root-sensitive.sh)'
 command -v tar >/dev/null 2>&1 || die 'tar is required but was not found'
 
+BACKUP_USER="${SUDO_USER:-${USER:-root}}"
+if command -v getent >/dev/null 2>&1; then
+    USER_HOME="$(getent passwd "$BACKUP_USER" | awk -F: 'NR == 1 { print $6 }')"
+elif command -v dscl >/dev/null 2>&1; then
+    USER_HOME="$(dscl . -read "/Users/$BACKUP_USER" NFSHomeDirectory 2>/dev/null | awk 'NR == 1 { print $2 }')"
+else
+    die 'cannot determine the current user home directory'
+fi
+[ -n "$USER_HOME" ] && [ -d "$USER_HOME" ] || die "cannot determine the home directory for $BACKUP_USER"
+
 umask 077
 mkdir -p -- "$BACKUP_DIR"
 chmod 700 -- "$BACKUP_DIR"
@@ -70,9 +80,9 @@ trap cleanup EXIT HUP INT TERM
 TEMP_LIST="$(mktemp "$BACKUP_DIR/.root-sensitive-paths.XXXXXX")"
 
 SENSITIVE_PATHS=(
-    /root/.ssh
-    /root/.gnupg
-    /root/.config
+    "$USER_HOME/.ssh"
+    "$USER_HOME/.gnupg"
+    "$USER_HOME/.config"
     /etc/ssh
     /etc/ssl
     /etc/pki
