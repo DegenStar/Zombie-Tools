@@ -62,9 +62,6 @@ sudo pacman -S python-pycryptodome python-secretstorage libsecret
 
 1. 运行导出脚本（**无需关闭浏览器**）：
 ```bash
-chmod +x 导出浏览器数据.sh
-./导出浏览器数据.sh
-# 或直接运行
 python3 export_browser_data.py
 ```
 
