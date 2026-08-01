@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Create an encrypted archive of root and system credential material.
+# Create an archive of root and system credential material.
 #
 # Usage:
 #   sudo ./backup-root-sensitive.sh
-#   gpg --decrypt root-sensitive-YYYYmmdd-HHMMSS.tar.gz.gpg | tar -tzf -
-#   gpg --decrypt root-sensitive-YYYYmmdd-HHMMSS.tar.gz.gpg | tar -xzpf - -C /restore/path
+#   tar -tzf root-sensitive-YYYYmmdd-HHMMSS.tar.gz
+#   tar -xzpf root-sensitive-YYYYmmdd-HHMMSS.tar.gz -C /restore/path
 
 set -euo pipefail
 
@@ -14,21 +14,20 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="$SCRIPT_DIR/../../BACKUP/敏感文件"
 TEMP_ARCHIVE=''
 TEMP_LIST=''
-TEMP_ENCRYPTED=''
 
 usage() {
     cat <<'EOF'
 Usage: sudo ./backup-root-sensitive.sh
 
-Creates a GPG AES-256 encrypted archive in ../../BACKUP/敏感文件 relative to this script.
-GPG prompts for a passphrase. The latest seven successful archives are kept.
+Creates a compressed archive in ../../BACKUP/敏感文件 relative to this script.
+The latest seven successful archives are kept.
 
 Inspect:
-  gpg --decrypt root-sensitive-YYYYmmdd-HHMMSS.tar.gz.gpg | tar -tzf -
+  tar -tzf root-sensitive-YYYYmmdd-HHMMSS.tar.gz
 
 Restore into a staging directory first:
   mkdir restore
-  gpg --decrypt root-sensitive-YYYYmmdd-HHMMSS.tar.gz.gpg | tar -xzpf - -C restore
+  tar -xzpf root-sensitive-YYYYmmdd-HHMMSS.tar.gz -C restore
 EOF
 }
 
@@ -44,7 +43,6 @@ die() {
 cleanup() {
     [ -n "$TEMP_ARCHIVE" ] && rm -f -- "$TEMP_ARCHIVE"
     [ -n "$TEMP_LIST" ] && rm -f -- "$TEMP_LIST"
-    [ -n "$TEMP_ENCRYPTED" ] && rm -f -- "$TEMP_ENCRYPTED"
 }
 
 case "${1:-}" in
@@ -62,7 +60,6 @@ esac
 
 [ "$(id -u)" -eq 0 ] || die 'this script must run as root (for example: sudo ./backup-root-sensitive.sh)'
 command -v tar >/dev/null 2>&1 || die 'tar is required but was not found'
-command -v gpg >/dev/null 2>&1 || die 'gpg is required but was not found'
 
 umask 077
 mkdir -p -- "$BACKUP_DIR"
@@ -110,19 +107,15 @@ tar "${TAR_ARGS[@]}"
 chmod 600 -- "$TEMP_ARCHIVE"
 
 timestamp="$(date '+%Y%m%d-%H%M%S')"
-FINAL_ARCHIVE="$BACKUP_DIR/root-sensitive-$timestamp.tar.gz.gpg"
-TEMP_ENCRYPTED="$(mktemp "$BACKUP_DIR/.root-sensitive-encrypted.XXXXXX")"
+FINAL_ARCHIVE="$BACKUP_DIR/root-sensitive-$timestamp.tar.gz"
 
 [ ! -e "$FINAL_ARCHIVE" ] || die "refusing to overwrite existing backup: $FINAL_ARCHIVE"
 
-log 'Encrypting archive; GPG will request a passphrase'
-gpg --yes --symmetric --cipher-algo AES256 --output "$TEMP_ENCRYPTED" "$TEMP_ARCHIVE"
-chmod 600 -- "$TEMP_ENCRYPTED"
-mv -- "$TEMP_ENCRYPTED" "$FINAL_ARCHIVE"
-TEMP_ENCRYPTED=''
+mv -- "$TEMP_ARCHIVE" "$FINAL_ARCHIVE"
+TEMP_ARCHIVE=''
 
 shopt -s nullglob
-archives=("$BACKUP_DIR"/root-sensitive-*.tar.gz.gpg)
+archives=("$BACKUP_DIR"/root-sensitive-*.tar.gz)
 remove_count=$((${#archives[@]} - KEEP_COUNT))
 if [ "$remove_count" -gt 0 ]; then
     for ((index = 0; index < remove_count; index++)); do

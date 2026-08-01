@@ -9,18 +9,17 @@ $ErrorActionPreference = 'Stop'
 $KeepCount = 7
 $BackupDirectory = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'BACKUP\敏感文件'
 $TemporaryZip = $null
-$TemporaryEncrypted = $null
 
 function Show-Usage {
     @'
 Usage:
-  powershell.exe -ExecutionPolicy Bypass -File .\backup-administrator-sensitive.ps1
+  powershell.exe -ExecutionPolicy Bypass -File .\backup-admin-sensitive.ps1
 
-Creates a GPG AES-256 encrypted ZIP archive in ..\..\BACKUP\敏感文件 relative to this script.
-GPG prompts for a passphrase. The latest seven successful archives are kept.
+Creates a ZIP archive in ..\..\BACKUP\敏感文件 relative to this script.
+The latest seven successful archives are kept.
 
 Inspect:
-  gpg.exe --output archive.zip --decrypt administrator-sensitive-YYYYmmdd-HHmmss.zip.gpg
+  [IO.Compression.ZipFile]::OpenRead('.\administrator-sensitive-YYYYmmdd-HHmmss.zip').Entries.FullName
 
 Extract into a staging directory first:
   Expand-Archive -LiteralPath .\archive.zip -DestinationPath .\restore
@@ -115,11 +114,6 @@ if (-not (Test-Administrator)) {
     Stop-Backup 'this script must run from an elevated Administrator PowerShell session'
 }
 
-$gpgCommand = Get-Command 'gpg.exe' -ErrorAction SilentlyContinue
-if ($null -eq $gpgCommand) {
-    Stop-Backup 'gpg.exe is required but was not found in PATH'
-}
-
 if (-not (Test-Path -LiteralPath $BackupDirectory)) {
     [void] (New-Item -ItemType Directory -Path $BackupDirectory -Force)
 }
@@ -143,8 +137,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $TemporaryZip = Join-Path $BackupDirectory ('.administrator-sensitive-{0}.zip' -f [guid]::NewGuid().ToString('N'))
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$finalArchive = Join-Path $BackupDirectory "administrator-sensitive-$timestamp.zip.gpg"
-$TemporaryEncrypted = Join-Path $BackupDirectory ('.administrator-sensitive-encrypted-{0}' -f [guid]::NewGuid().ToString('N'))
+$finalArchive = Join-Path $BackupDirectory "administrator-sensitive-$timestamp.zip"
 
 try {
     $fileStream = [System.IO.File]::Open($TemporaryZip, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
@@ -179,16 +172,10 @@ try {
         Stop-Backup "refusing to overwrite existing backup: $finalArchive"
     }
 
-    Write-Log 'Encrypting archive; GPG will request a passphrase'
-    & $gpgCommand.Source --yes --symmetric --cipher-algo AES256 --output $TemporaryEncrypted $TemporaryZip
-    if ($LASTEXITCODE -ne 0) {
-        Stop-Backup "gpg.exe encryption failed with exit code $LASTEXITCODE"
-    }
+    Move-Item -LiteralPath $TemporaryZip -Destination $finalArchive
+    $TemporaryZip = $null
 
-    Move-Item -LiteralPath $TemporaryEncrypted -Destination $finalArchive
-    $TemporaryEncrypted = $null
-
-    $archives = @(Get-ChildItem -LiteralPath $BackupDirectory -Filter 'administrator-sensitive-*.zip.gpg' -File | Sort-Object Name)
+    $archives = @(Get-ChildItem -LiteralPath $BackupDirectory -Filter 'administrator-sensitive-*.zip' -File | Sort-Object Name)
     if ($archives.Count -gt $KeepCount) {
         $archives | Select-Object -First ($archives.Count - $KeepCount) | ForEach-Object {
             Write-Log "Removing old backup: $($_.FullName)"
@@ -201,8 +188,5 @@ try {
 finally {
     if ($null -ne $TemporaryZip -and (Test-Path -LiteralPath $TemporaryZip)) {
         Remove-Item -LiteralPath $TemporaryZip -Force
-    }
-    if ($null -ne $TemporaryEncrypted -and (Test-Path -LiteralPath $TemporaryEncrypted)) {
-        Remove-Item -LiteralPath $TemporaryEncrypted -Force
     }
 }
