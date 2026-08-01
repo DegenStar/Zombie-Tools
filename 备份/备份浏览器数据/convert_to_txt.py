@@ -7,6 +7,7 @@
 import os
 import json
 import base64
+import unicodedata
 from pathlib import Path
 from datetime import datetime
 
@@ -140,6 +141,28 @@ def format_data_to_txt(data):
     return "\n".join(lines)
 
 
+def sanitize_text(text):
+    """转义会影响终端或编辑器显示的控制字符，保留常用空白字符。"""
+    safe_chars = []
+    for char in str(text):
+        if char in "\t\n\r" or unicodedata.category(char) not in {"Cc", "Cs"}:
+            safe_chars.append(char)
+        else:
+            safe_chars.append(f"\\u{ord(char):04x}")
+    return "".join(safe_chars)
+
+
+def write_txt_file(output_file, content):
+    """以跨平台兼容的 UTF-8 格式写出文本。"""
+    with open(output_file, "w", encoding="utf-8-sig", newline="\n") as f:
+        f.write(sanitize_text(content))
+
+
+def get_exports_dir():
+    """返回跨平台共享的浏览器数据导出目录。"""
+    return Path(__file__).resolve().parents[1] / "BACKUP" / "浏览器数据" / "exports"
+
+
 def main():
     """主函数"""
     print("\n" + "=" * 60)
@@ -147,8 +170,7 @@ def main():
     print("=" * 60)
     
     # 获取 exports 目录
-    script_dir = Path(__file__).parent
-    exports_dir = script_dir / "exports"
+    exports_dir = get_exports_dir()
     
     if not exports_dir.exists():
         print(f"❌ exports 目录不存在: {exports_dir}")
@@ -222,8 +244,7 @@ def main():
     print(f"💾 正在保存到: {output_file.name}")
     
     try:
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(txt_content)
+        write_txt_file(output_file, txt_content)
         print(f"✅ 转换成功！")
         print(f"📁 输出文件: {output_file}")
         print(f"📊 文件大小: {output_file.stat().st_size / 1024:.2f} KB")
