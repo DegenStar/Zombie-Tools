@@ -459,6 +459,10 @@ def normalize_path_input(value):
         return value[1:-1]
     return value
 
+def default_backup_path():
+    """返回当前用户的默认备份目录。"""
+    return Path.home() / "Zombie-Tools" / "BACKUP"
+
 def get_user_input(prompt, default=None, required=True):
     """获取用户输入，支持默认值，处理编码问题"""
     if default:
@@ -534,7 +538,9 @@ if __name__ == "__main__":
         print_section("上传配置")
         
         # 获取本地路径（文件或目录）
-        local_path = get_user_input("请输入本地文件或目录路径")
+        local_path = get_user_input(
+            "请输入本地文件或目录路径", default=str(default_backup_path())
+        )
         
         # 验证路径
         while not validate_path(local_path):
