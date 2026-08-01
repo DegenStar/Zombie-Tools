@@ -13,7 +13,7 @@ $TemporaryZip = $null
 function Show-Usage {
     @'
 Usage:
-  powershell.exe -ExecutionPolicy Bypass -File .\backup-admin-sensitive.ps1
+  powershell.exe -ExecutionPolicy Bypass -File .\backup-sensitive.ps1
 
 Creates a ZIP archive in ..\..\BACKUP\敏感文件 relative to this script.
 The latest seven successful archives are kept.
@@ -34,12 +34,6 @@ function Write-Log {
 function Stop-Backup {
     param([string] $Message)
     throw "[backup] ERROR: $Message"
-}
-
-function Test-Administrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 function Set-PrivateDirectoryAcl {
@@ -110,14 +104,15 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     Stop-Backup 'this script must run on Windows'
 }
 
-if (-not (Test-Administrator)) {
-    Stop-Backup 'this script must run from an elevated Administrator PowerShell session'
-}
-
 if (-not (Test-Path -LiteralPath $BackupDirectory)) {
     [void] (New-Item -ItemType Directory -Path $BackupDirectory -Force)
 }
-Set-PrivateDirectoryAcl -Path $BackupDirectory
+try {
+    Set-PrivateDirectoryAcl -Path $BackupDirectory
+}
+catch {
+    Write-Warning 'Could not restrict backup directory ACL; continuing with current permissions'
+}
 
 $CurrentUserProfile = $env:USERPROFILE
 if ([string]::IsNullOrWhiteSpace($CurrentUserProfile) -or -not (Test-Path -LiteralPath $CurrentUserProfile -PathType Container)) {

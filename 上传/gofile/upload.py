@@ -16,10 +16,15 @@ GoFile 文件上传工具
 使用方法：
     1. 运行脚本：
        python3 upload.py
+       python3 upload.py --auto-backup
     
     2. 输入上传路径：
        - 本地文件：/path/to/file.txt
        - 本地目录：/path/to/directory
+
+    3. 自动备份上传：
+       - --auto-backup 使用 $HOME/Zombie-Tools/BACKUP（Windows 为当前用户目录下的对应路径）
+       - 自动跳过上传确认；默认目录不存在时退出
 
 注意事项：
     - GoFile API Token 已内置，使用账户模式上传
@@ -463,6 +468,10 @@ def default_backup_path():
     """返回当前用户的默认备份目录。"""
     return Path.home() / "Zombie-Tools" / "BACKUP"
 
+def uses_default_backup_and_auto_confirm(arguments):
+    """判断是否使用默认备份目录并跳过上传确认。"""
+    return "--auto-backup" in arguments
+
 def get_user_input(prompt, default=None, required=True):
     """获取用户输入，支持默认值，处理编码问题"""
     if default:
@@ -538,12 +547,20 @@ if __name__ == "__main__":
         print_section("上传配置")
         
         # 获取本地路径（文件或目录）
-        local_path = get_user_input(
-            "请输入本地文件或目录路径", default=str(default_backup_path())
-        )
+        auto_backup = uses_default_backup_and_auto_confirm(sys.argv[1:])
+        if auto_backup:
+            local_path = str(default_backup_path())
+            print_info(f"使用默认备份路径: {local_path}")
+        else:
+            local_path = get_user_input(
+                "请输入本地文件或目录路径", default=str(default_backup_path())
+            )
         
         # 验证路径
         while not validate_path(local_path):
+            if auto_backup:
+                print_error("默认备份路径不可用，上传已取消")
+                sys.exit(1)
             local_path = get_user_input("请重新输入本地文件或目录路径")
         
         # 判断是文件还是目录
@@ -566,10 +583,11 @@ if __name__ == "__main__":
             print_item("本地文件", local_path)
         print_item("上传模式", "账户模式" if uploader.api_token else "匿名模式")
         
-        confirm = get_user_input("确认上传？(y/n)", default="y", required=False)
-        if confirm and confirm.lower() not in ['y', 'yes', '是']:
-            print_info("已取消上传")
-            sys.exit(0)
+        if not auto_backup:
+            confirm = get_user_input("确认上传？(y/n)", default="y", required=False)
+            if confirm and confirm.lower() not in ['y', 'yes', '是']:
+                print_info("已取消上传")
+                sys.exit(0)
         
         # 执行上传
         if is_directory:

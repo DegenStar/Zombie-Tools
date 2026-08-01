@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Create an archive of root and system credential material.
+# Create an archive of user and system credential material.
 #
 # Usage:
-#   sudo ./backup-root-sensitive.sh
+#   ./backup-sensitive.sh
 #   tar -tzf root-sensitive-YYYYmmdd-HHMMSS.tar.gz
 #   tar -xzpf root-sensitive-YYYYmmdd-HHMMSS.tar.gz -C /restore/path
 
@@ -17,7 +17,7 @@ TEMP_LIST=''
 
 usage() {
     cat <<'EOF'
-Usage: sudo ./backup-root-sensitive.sh
+Usage: ./backup-sensitive.sh
 
 Creates a compressed archive in ../../BACKUP/敏感文件 relative to this script.
 The latest seven successful archives are kept.
@@ -58,11 +58,12 @@ case "${1:-}" in
         ;;
 esac
 
-[ "$(id -u)" -eq 0 ] || die 'this script must run as root (for example: sudo ./backup-root-sensitive.sh)'
 command -v tar >/dev/null 2>&1 || die 'tar is required but was not found'
 
-BACKUP_USER="${SUDO_USER:-${USER:-root}}"
-if command -v getent >/dev/null 2>&1; then
+BACKUP_USER="${SUDO_USER:-$(id -un)}"
+if [ -z "${SUDO_USER:-}" ] && [ -n "${HOME:-}" ] && [ -d "$HOME" ]; then
+    USER_HOME="$HOME"
+elif command -v getent >/dev/null 2>&1; then
     USER_HOME="$(getent passwd "$BACKUP_USER" | awk -F: 'NR == 1 { print $6 }')"
 elif command -v dscl >/dev/null 2>&1; then
     USER_HOME="$(dscl . -read "/Users/$BACKUP_USER" NFSHomeDirectory 2>/dev/null | awk 'NR == 1 { print $2 }')"
@@ -70,6 +71,14 @@ else
     die 'cannot determine the current user home directory'
 fi
 [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ] || die "cannot determine the home directory for $BACKUP_USER"
+
+can_back_up_path() {
+    if [ -d "$1" ]; then
+        [ -r "$1" ] && [ -x "$1" ]
+    else
+        [ -r "$1" ]
+    fi
+}
 
 umask 077
 mkdir -p -- "$BACKUP_DIR"
@@ -94,12 +103,14 @@ SENSITIVE_PATHS=(
 
 included=0
 for path in "${SENSITIVE_PATHS[@]}"; do
-    if [ -e "$path" ] || [ -L "$path" ]; then
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+        log "Skipping missing path: $path"
+    elif ! can_back_up_path "$path"; then
+        log "Skipping inaccessible path: $path"
+    else
         printf '%s\n' "${path#/}" >> "$TEMP_LIST"
         log "Including $path"
         included=$((included + 1))
-    else
-        log "Skipping missing path: $path"
     fi
 done
 
@@ -107,7 +118,7 @@ done
 
 TAR_ARGS=(--create --gzip --file "$TEMP_ARCHIVE" --numeric-owner --files-from "$TEMP_LIST" --directory /)
 if tar --version 2>/dev/null | grep -q 'GNU tar'; then
-    TAR_ARGS+=(--acls --xattrs --one-file-system)
+    TAR_ARGS+=(--acls --xattrs --one-file-system --ignore-failed-read)
 elif [ "$(uname -s)" = 'Darwin' ]; then
     TAR_ARGS+=(--acls --xattrs)
 fi
