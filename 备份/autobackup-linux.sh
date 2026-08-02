@@ -45,12 +45,12 @@ run_step '敏感文件备份' \
     bash "${zombie_tools}/备份/备份敏感文件/backup-sensitive.sh" || true
 
 if run_step 'Infini Cloud 上传' \
-    python3 "${zombie_tools}/上传/infini-cloud/upload.py" --auto-backup; then
+    python3 "${zombie_tools}/上传-跨传/infini-cloud/upload.py" --auto-backup; then
     :
 else
     echo '[autobackup] Infini Cloud 失败，回退到 GoFile' >&2
     run_step 'GoFile 上传' \
-        python3 "${zombie_tools}/上传/gofile/upload.py" --auto-backup || true
+        python3 "${zombie_tools}/上传-跨传/gofile/upload.py" --auto-backup || true
 fi
 
 echo '[autobackup] 所有步骤已处理。'

