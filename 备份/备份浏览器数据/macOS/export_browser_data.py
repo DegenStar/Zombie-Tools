@@ -37,7 +37,7 @@ class BrowserDataExporter:
             "Edge": os.path.join(home, "Library/Application Support/Microsoft Edge"),
             "Brave": os.path.join(home, "Library/Application Support/BraveSoftware/Brave-Browser"),
         }
-        self.output_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports"
+        self.output_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports" / "macOS"
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def get_available_profiles(self, user_data_dir):

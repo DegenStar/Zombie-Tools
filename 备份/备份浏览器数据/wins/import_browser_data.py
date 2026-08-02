@@ -53,7 +53,7 @@ class BrowserDataImporter:
             "Edge": os.path.join(os.environ['LOCALAPPDATA'], "Microsoft", "Edge", "User Data"),
             "Brave": os.path.join(os.environ['LOCALAPPDATA'], "BraveSoftware", "Brave-Browser", "User Data"),
         }
-        self.exports_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports"
+        self.exports_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports" / "wins"
     
     def get_available_profiles(self, user_data_dir):
         """获取可用的 Profile 列表"""
