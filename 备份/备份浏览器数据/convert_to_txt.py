@@ -160,7 +160,7 @@ def write_txt_file(output_file, content):
 
 def get_exports_dir():
     """返回跨平台共享的浏览器数据导出目录。"""
-    return Path(__file__).resolve().parents[1] / "BACKUP" / "浏览器数据" / "exports"
+    return Path(__file__).resolve().parents[2] / "BACKUP" / "浏览器数据" / "exports"
 
 
 def main():

@@ -1,0 +1,1006 @@
+﻿================================================================================
+浏览器数据导出
+================================================================================
+导出时间: 2026-07-30 14:43:43
+用户名: blaze
+================================================================================
+
+
+================================================================================
+浏览器: Chrome
+================================================================================
+配置文件数量: 1
+master_key (base64): JagVQyaJWxLBWZ/6nfIFDZDe+1rkNGlcJqKLcY+ix3Q=
+Cookies 总数: 0 个
+密码总数: 242 个
+
+
+--------------------------------------------------------------------------------
+配置文件: Default
+--------------------------------------------------------------------------------
+
+无 Cookies 数据
+
+
+================================================================================
+密码列表
+================================================================================
+总计: 242 个
+
+
+[1] https://sniffies.com/map/account/reset-password
+    用户名: blaze2709@gmail.com
+    密码: \u0002\u0016%\u0008@
+
+[2] https://tour.camsoda.com/register.php
+    用户名: Curious4gay
+    密码: XwqHn
+
+[3] http://192.168.20.202/zm/
+    用户名: admin
+    密码: \u0014\u000f6\u0013NxQ\u0018
+
+[4] http://www.manplay.com/login
+    用户名: mykal2709
+    密码: qcm
+
+[5] https://mhmrtc.hua.hrsmart.com/hr/ats/JobSeeker/createAccount
+    用户名: mschweitzer77@gmail.com
+    密码: B5c*3
+
+[6] https://www.eonon.com/IsLogin.aspx
+    用户名: blaze2709@yahoo.com
+    密码: gOY u
+
+[7] https://www.walmart.com/account/login
+    用户名: blaze2709@yahoo.com
+    密码: ARh(T
+
+[8] http://192.168.10.22/Main_Login.asp
+    用户名: nunya
+    密码: \u0003vHk$\u0011PH
+
+[9] https://login.yahoo.com/
+    用户名: blaze2709@yahoo.com
+    密码: \u000e#ƣNJgv/܊W/
+
+[10] https://user.zmodo.com/login
+    用户名: blaze2709@gmail.com
+    密码: w\u0007.}uO
+
+[11] https://auth.freetaxusa.com/
+    用户名: blaze2709
+    密码: Tc=3?[
+
+[12] https://app.zoogvpn.com/sign-up
+    用户名: blaze2709@gmail.com
+    密码: ]\u001cnJJ
+
+[13] https://myaccount.westlakefinancial.com/wfsWebsite/myAccountOnline
+    用户名: blaze2709@gmail.com
+    密码: \u0004%}\u000bhf@2
+
+[14] https://www.discountpowertx.com/myaccount/oam_registration
+    用户名: mykal2709
+    密码: p}Q\u007fH^2
+
+[15] android://McN3PWbfVdV_mfkWiw_OfIL7801yLsqCMLzcdmz3cyKK7M81TjF_DvV6UvsXlhd-8MkJTUpxO_oALZnBQVe_oA==@com.microsoft.rdc.android/
+    用户名: blaze2709@yahoo.com
+    密码: 6,\u0006\u001b\u0000(@\u0002
+
+[16] http://192.168.20.251:8096/web/
+    用户名: jellyfin
+    密码: UJ-b\u0000_\u0002G
+
+[17] android://c1mKaAj-59eAdyF4UiqRNb1YJimg4qL5CaEXJTK22_npDwm2bsEOvXROiJuPNWg4RW19QaSHAjKW_Jgz8ROrgQ==@com.afterpaymobile.us/
+    用户名: blaze2709@yahoo.com
+    密码: >\u0013Q
+
+[18] http://192.168.10.1/admin-access.asp
+    用户名: /TomatoThemeBase
+    密码: )wd\u0012EjT
+
+[19] http://192.168.10.253/
+    用户名: admin
+    密码: 0\u0016\u0019F)r%\u0005
+
+[20] https://www.textnow.com/login
+    用户名: blaze2709@yahoo.com
+    密码: \u0008\u007f`\O&0
+
+[21] https://www.target.com/login
+    用户名: blaze2709@gmail.com
+    密码: lO
+
+
+[22] https://www.biolifeplasma.com/login
+    用户名: blaze2709@yahoo.com
+    密码: fW\u0013\u000b1
+
+[23] android://HAd9J6Bpk55WOo6Vmut2cjGpTrbyqefLwVOPCVlWAAWG_6tSqyqZCER-VL-_uJlfA17swkPfmfFtHOkWDSdfog==@com.estrongs.android.pop/
+    用户名: blaze2709@gmail.com
+    密码: JEL.JGcO
+
+[24] https://www.rockauto.com/en/cart/
+    用户名: blaze2709@gmail.com
+    密码: )ܽ\u001aXBh\u0008j^\u001f
+
+[25] https://www.paypal.com/signin
+    用户名: blaze2709@gmail.com
+    密码: \u0015a|ڹ\u0002"-
+
+[26] https://pricetronic.com/account/login
+    用户名: blaze2709@yahoo.com
+    密码: ! \u007f\u0006
+
+[27] https://my.bigpictureloans.com/MemberPage.aspx
+    用户名: blaze2700
+    密码: 0(Vҽ
+8ؤ
+
+[28] https://online.af247.com/OnlineRegistration/RegisterCustomer/AccountCreation
+    用户名: blaze2709@yahoo.com
+    密码: t\u0017gދ}V
+
+[29] https://sagora.clearcompany.com/careers/jobs/8af54fc1-e35f-3e7b-3dd6-e2aba9c93b0d/apply/32675f3b-863b-5983-b3ab-f82e06501840
+    用户名: Mschweitzer77@gmail.com
+    密码: \u0013mIR
+
+[30] https://login.yahoo.com/config/login
+    用户名: blaze2709@yahoo.com
+    密码: \u0015jDVG
+
+[31] https://password.kik.com/p
+    用户名: 
+    密码: Ai\u001bϩ
+
+[32] http://192.168.10.1:8081/Main_Login.asp
+    用户名: nunya
+    密码: vLM|jt
+
+[33] https://www.sammobile.com/login/
+    用户名: Mykal2709
+    密码: a\u0015.
+
+[34] android://HAd9J6Bpk55WOo6Vmut2cjGpTrbyqefLwVOPCVlWAAWG_6tSqyqZCER-VL-_uJlfA17swkPfmfFtHOkWDSdfog==@com.iViNi.bmwhatLite/
+    用户名: blaze2709@yahoo.com
+    密码: \u000f5\u0006\u0015\u0008\u000e
+
+[35] https://txt.texas.gov/forgot-password/reset
+    用户名: timmarksjr@gmail.com
+    密码: s\u0017\u0014\u0011
+
+[36] http://192.168.10.2/
+    用户名: admin
+    密码: g\u0004\u001e\u001f(N\u0015
+
+[37] https://www.banggood.com/YUEHOO-9-Inch-2-DIN-For-Android-8_0-4-core-2+32G-Car-MP5-Player-Touch-Screen-GPS-bluetooth-For-BMW-E90-E91-E92-E93-05-12-p-1560792.html
+    用户名: blaze2709@yahoo.com
+    密码: +
+
+[38] https://user-zmodo.meshare.com/user/login
+    用户名: blaze2709@gmail.com
+    密码: /4ēܴg
+
+[39] https://my.lookout.com/m/confirm_password
+    用户名: 
+    密码: }\u000b{L+c
+
+[40] android://pBowWSLvFMHp-Qulwesr2bSrcr9vsiPPhGed3xcXj5ZNJccRGvbP7pPFSqeoQ8NHooDFe29iIWzU_fETWE2UpQ==@com.linkedin.android/
+    用户名: Mschweitzer77@gmail.com
+    密码: Ҝ\u0013
+
+[41] https://account.protonvpn.com/login
+    用户名: blaze2709
+    密码: +%,7i
+
+[42] https://hrjcpyprd-dmz.oracleoutsourcing.com/psc/PJCPY2/EMPLOYEE/HRMS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL
+    用户名: Mschweitzer77
+    密码: \'o
+
+[43] https://app.perpay.com/login/
+    用户名: 8179952791
+    密码: rTI\u001fv
+
+[44] http://192.168.20.1/Main_Login.asp
+    用户名: nunya
+    密码: 	$qGM]\u001f\u0000
+
+[45] https://www.gay-torrents.net/register.php
+    用户名: mykal2709
+    密码: 8
+
+[46] https://portal.afterpay.com/us/login-password
+    用户名: blaze2709@yahoo.com
+    密码: \u0016F\u0017N>
+
+[47] android://thXUDt9XtcBC_8yuRWFia8h9YICUaU82WkxLcuCDgpzgiLLFc4HPsUbwfvOOvi3Yp1k8LL3NXxpIswe-bEiiXA==@com.fet.ideawise/
+    用户名: 8179952791
+    密码: ;DCC\u0013
+
+[48] https://login.yahoo.com/account/challenge/password
+    用户名: bmw128w
+    密码: o\u0008d\u0016
+q>g
+
+[49] https://account.t-mobile.com/forgotpassword/v2/changepassword
+    用户名: blaze2709@gmail.com
+    密码: N0\u0005<i[
+
+[50] https://forum.xda-developers.com/register/connected-accounts/google/
+    用户名: blaze2709@gmail.com
+    密码: D\u00072P3Y
+
+[51] https://en.bongacams.com/all-models
+    用户名: BiLife2022
+    密码: ky\u00179;u\u000c
+
+[52] https://signin.att.com/dynamic/iamLRR/LrrController
+    用户名: blaze2709@gmail.com
+    密码: Ek\u0015\u0013
+
+[53] https://tapo.tplinkcloud.com/tapo_web/
+    用户名: blaze2709@yahoo.com
+    密码: k{ey0y9`,
+
+[54] https://login.live.com/ppsecure/post.srf
+    用户名: blaze2709@yahoo.com
+    密码: J3\u0008\u000f\u001cn\u0014
+
+[55] http://192.168.20.249:5380/
+    用户名: mykal
+    密码: Xy]%tH
+
+[56] android://2Q82TiAojrruN4q56Ttwb9pRQAkZ73TAEh2r0iatwKG7k2pb9_aRB1c9XJKShM5Dyc-tFk3cdk7gxb7FTpaKrw==@com.estrongs.android.pop/
+    用户名: Blaze2709@gmail.com
+    密码: BϛK	6
+
+[57] https://file.xygala.com/
+    用户名: xyauto
+    密码: Y[!
+
+[58] https://www.shopsmarter.com/join/COU/Land
+    用户名: blaze2709@yahoo.com
+    密码: kޱc~
+
+[59] android://McN3PWbfVdV_mfkWiw_OfIL7801yLsqCMLzcdmz3cyKK7M81TjF_DvV6UvsXlhd-8MkJTUpxO_oALZnBQVe_oA==@com.microsoft.rdc.androidx/
+    用户名: blaze2709@yahoo.com
+    密码: ;x6EF\u001fw	a
+
+[60] android://PQ0HmXrHleF0if3VqTpiISN3aCHzeHbrMkdEstWh5yf1gyZD4oxCxzD_S_hfjezAXeNjvAWCmOwCxgVXN1ms_A==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: \u0018\u0000\u0000\u001f0c.\\u0007`
+
+[61] https://m.chaturbate.com/auth/login/
+    用户名: bi_ife2000
+    密码: \u001b`_s9>
+
+[62] https://www.linkedin.com/uas/oauth2/authorization
+    用户名: Mschweitzer77@gmail.com
+    密码: \u000e\u0008\u000cޚ@
+
+[63] https://www.noip.com/
+    用户名: blaze2709@gmail.com
+    密码: \u0002\u0004:\u0013\u0001^
+
+[64] https://appleid.apple.com/auth/authorize
+    用户名: blaze2709@yahoo.com
+    密码: &r\u001feKhǎ/
+
+
+[65] android://s4MDhljKiUvlp7n2aBsC28rVOPafYSUD5MyImMnOdXYkIQ6OS7y-p1L69kXBdk0eZcNBbZzBkHYkVNErxmwUvw==@com.adam4adam.radar2.ui/
+    用户名: blaze2709@yahoo.com
+    密码: \u0015̞.\u0018
+
+[66] android://AugZ9HQBLzZWUkgTGngKG-30sf8ZfLEnK0ATidiWG-0NFD8h10BEUaXWLMF7AeQkYi6_dOuScmAsCoYbVSc-aw==@me.zhanghai.android.files/
+    用户名: blaze
+    密码: t6alK\u001a\u0018\u0004\u001c
+
+[67] http://192.168.10.21/
+    用户名: nunya
+    密码: \u001a\u0002P}Μ,
+
+[68] https://www.hilton.com/en/auth2/guest/login/
+    用户名: 658045812
+    密码: \u001c\u007fCJ,
+
+[69] android://3xf9_y6Zv_Cv22dIIICZlMK1xeTpx4qgRjC2c03EHkEkWD7bBs2zEhvMQ8AfLslj5qSdqfVK5XWHEAFOtyhwmQ==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: ㄲi\u001e`\u000eD\u0002Zi-o
+
+[70] https://www.capitalone.com/
+    用户名: blaze2709
+    密码: 
+)\u0017\u0002`H\u000b\u0004_=sK\u0018
+
+[71] https://signin.ebay.com/signin/
+    用户名: blaze2709@gmail.com
+    密码: {6U\u000cIϧQ,o
+
+[72] https://account.t-mobile.com/signin/v2/
+    用户名: 8179952791
+    密码: R\u0006+]\
+
+[73] https://www.smartr.me/public/sign-in
+    用户名: timothy.marks94@gmail.com
+    密码: \u001c\u000eY2Z
+
+[74] android://UPCNkwsSjvAfjmeFJ4xcRuDCxYQ3LjINTU1K5gbWCDrUDUCi73igYaTxqzk8bLxtyXRkhaaWhkHKeAnbwIp9Eg==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: ˳\u00193IMl\u0019
+
+[75] http://router.asus.com/Main_Login.asp
+    用户名: nunya
+    密码: >Gu\u0005c\u0010
+
+[76] https://id.logi.com/
+    用户名: blaze2709@yahoo.com
+    密码: zx\u001a͛
+
+[77] android://htU2afQxgRI8yRUQTyKttacfEl2KSr06lzzz9A9JqpaZ__H-JuCFGk3RG8awgbwy-dgQ-Zte1H0tsVBzV8NIZg==@com.access.typerks/
+    用户名: mschweitzer77@gmail.com
+    密码: %\u001dSD
+
+[78] android://iS3lKRZJ9w9gMMr7borzq_qMpv7Wz7ULaQ5jgfjWq_umdt5wfp53XVSDTKc0vgI4JDeJRdhplXb7FJIoBCYK1w==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: ԗ1l\u0004ޅ)^BV`
+
+[79] https://www.taxslayer.com/
+    用户名: blaze2709
+    密码: \u0007-,ې]Ú
+
+[80] android://P0rrRkO12SQAETGB7kOOxRoaaSfQur5ismPh757yocHFhfwhbZWH72Mg790EVlvIB1JEuzNh75UBTuAYkyfaiA==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: :Kx\u001bY\u0004,\u0004T
+
+[81] android://Kpa8JQi_ab3ztZvND4JbrZ3cJtnsJstE3UV-uVVhmLo-Ad9NCfla5dz-6yMZyH9ONMsLSbIX7WELLtACQ7xf_A==@com.ahyoxsoft.hookup/
+    用户名: blaze2709@gmail.com
+    密码: 'c\u0011eS
+
+[82] https://account.samsung.com/accounts/v1/samsung_com_us/signInPassword
+    用户名: blaze2709@yahoo.com
+    密码: H4ڬb7\u001d(\u0019
+
+[83] https://chaturbate.com/
+    用户名: Curious4gay
+    密码: T\u0000\u0010Qw?\u007f
+
+[84] http://192.168.1.1/
+    用户名: admin
+    密码: $\u001a\u001ca#2\u0016
+
+[85] https://login.live.com/
+    用户名: blaze2709@yahoo.com
+    密码: 3\u001c[\u0008X@\u0008@
+
+[86] http://file.xygala.com/
+    用户名: xyauto
+    密码: \u001fk\u0019
+
+[87] https://www.facebook.com/login.php
+    用户名: blaze2709@yahoo.com
+    密码: COʕVYN
+
+[88] https://m.chaturbate.com/auth/login/
+    用户名: Curious4gay
+    密码: w.2\u0019\u0014Ѝ~
+
+[89] https://idmsa.apple.com/appleauth/auth/authorize/signin
+    用户名: blaze2709@yahoo.com
+    密码: (@/W5\u00086\u0011i4
+
+[90] https://www.ebay.com/signin/scl/s
+    用户名: blaze2709@gmail.com
+    密码: \u000c&@{,
+
+[91] https://app.myautoloan.com/app/acct.aspx
+    用户名: blaze2709@gmail.com
+    密码: \u0018(ZP؂\u0002
+
+[92] https://verified.capitalone.com/sign-in/
+    用户名: blaze2709@icloud.com
+    密码: }C_\u001bkq
+
+[93] https://m.facebook.com/login.php
+    用户名: blaze2709@yahoo.com
+    密码: \u000b#\u000c
+
+[94] android://ZhBY2pTrjIVmrZU1QoZcG9hicSzBeWzurSquCbo4uFMukKik0Dr55KbCYgVAf9YjmQoBR_iWIhSE_lDanyo88Q==@directenergy.mobileoam/
+    用户名: blaze2709@gmail.com
+    密码: Ap\u0005-a3
+
+[95] https://account.t-mobile.com/
+    用户名: blaze2709@yahoo.com
+    密码: RhlXE
+
+[96] https://www.facebook.com/Hack.DragonCity.MonsterLegends.2013/posts/311683622303025
+    用户名: blaze2709@yahoo.com
+    密码: 6;8\u0000J㚵
+
+[97] https://login.yahoo.com/account/challenge/password
+    用户名: blaze2709
+    密码: ^>!Y#
+
+[98] android://yZBenyrJmxevVnkps6qkSrczXSXtUvG3-wJkNqOBmHgZ3rOAEnq8SW_fSyfIk4V_X5lkbbw-eedkjQP8j4c0IA==@com.activehours/
+    用户名: blaze2709@yahoo.com
+    密码: \u0008f꼰n!
+
+[99] android://SHQgTMdUjPs3h2iSeFN56dZiPjQuvP27AAcJr-ERmdkHjylx4XYe1Y9RXxeugE9d1g6IJxUC0YUZpyHaUdw0xQ==@com.pinger.textfree/
+    用户名: blaze2709@gmail.com
+    密码: @\u001cʢG\u007fT
+
+[100] https://account.t-mobile.com/
+    用户名: Timmarksjr@gmail.com
+    密码: UMj\u007f\u000eo
+
+[101] https://myaccount.exeterfinance.com/login
+    用户名: blaze2709
+    密码: {\u007fѿ\u0016\u0007
+
+[102] https://www.westlakefinancial.com/my-account-login/
+    用户名: blaze2709@gmail.com
+    密码: \u001c\u001b^ɦU
+
+[103] https://id.mcafee.com/login
+    用户名: blaze2709@yahoo.com
+    密码: \u000c\u0011e\u0006Z	Yȯ
+
+[104] https://secure.newegg.com/identity/signup
+    用户名: blaze2709@outlook.com
+    密码: snȥJJ
+
+[105] https://www.creditkarma.com/auth/logon
+    用户名: blaze2709@yahoo.com
+    密码: cw*/ʿ3{#2
+
+[106] https://appform.myautoloan.com/
+    用户名: 
+    密码: H\u001e\u0014\^ܫll
+
+[107] https://miningpoolhub.com/index.php
+    用户名: blaze2709@yahoo.com
+    密码: 56\u000e\u001f
+
+[108] https://www.figloans.com/signin
+    用户名: blaze2709@yahoo.com
+    密码: \u0004
+⌸|\u001a
+
+[109] https://www.mail.com/
+    用户名: awesome2709@mail.com
+    密码: &\u0000
+q
+
+[110] https://www.eazytyme.com/eztlogin.asp
+    用户名: MJSCHWEITZER
+    密码: 3YBQ\u0001\u0003\u0011
+&
+
+[111] android://Flj4hK7Np_w22zx8o5lbTkLyUNaFGLIf1uIGojsCjCiCWZ5glzybyw7bqeLLhJfL-I4Q7I8gvUbToicTGYxTVQ==@kik.android/
+    用户名: blaze2709@outlook.com
+    密码: ot&Sn
+
+[112] https://www.dropbox.com/login
+    用户名: blaze2709@yahoo.com
+    密码: dq\u001d\u001ek]C\u0011
+
+[113] android://eCzBkFStDhAuIyL7oeTwyFZWxsF5_yiZN0v9_dRlvCljEFeTwD93D96tukBqtlSigQ0KhYqhWu_MJZPcv5ujQA==@com.immediasemi.android.blink/
+    用户名: blaze2709@yahoo.com
+    密码: U@Ʋ"]
+
+[114] android://ktrotdUBRKiNis73b1SMQlnBPrUU5wb09NHPq9LFOGykiFyWjCbquR-i_Y_2--bjqZRbOP4-oLC-sP7PmLAl-Q==@com.lgbtq.hookup.gay.lesbian.dating.newe/
+    用户名: blaze2709@gmail.com
+    密码: [X\u0008+8>
+
+[115] https://application.openroadlending.com/Customer/Login
+    用户名: 3879118
+    密码: J-
+
+[116] android://s4MDhljKiUvlp7n2aBsC28rVOPafYSUD5MyImMnOdXYkIQ6OS7y-p1L69kXBdk0eZcNBbZzBkHYkVNErxmwUvw==@com.adam4adam.radar2.ui/
+    用户名: adam67bc0c17e275
+    密码: +\u000eJi<\u0003Rz
+
+[117] https://www.vroom.com/myaccount/login
+    用户名: blaze2709@gmail.com
+    密码: \u0000eE+\u0010~
+
+[118] https://100sjewelry.com/account/register
+    用户名: blaze2709@yahoo.com
+    密码: R>U
+
+[119] https://flumepay.com/register
+    用户名: blaze2709@gmail.com
+    密码: \u0000'Q){JL
+
+[120] http://192.168.10.1/
+    用户名: admin
+    密码: \u0002Nd\u000e3EG\u0004
+
+[121] https://www.facebook.com/
+    用户名: blaze2709@yahoo.com
+    密码: \u001f3d+\u0003la
+
+[122] https://cdn.getpinwheel.com/
+    用户名: MS6688015
+    密码: (7\u000bEm	h^%ց
+
+[123] https://secure.newegg.com/identity/signin
+    用户名: blaze2709@gmail.com
+    密码: 
+\u001fױ
+
+[124] http://192.168.1.1/cgi-bin/luci/
+    用户名: root
+    密码: [[-\u000b\u0019\u0007
+
+[125] https://www.pizzahut.com/v1/idp/login
+    用户名: blaze2709@yahoo.com
+    密码: \u0017\u0008\u001cAA\u0016)[
+
+[126] https://login.driveway.com/u/login
+    用户名: timmarksjr@gmail.com
+    密码: yA\.(
+
+[127] https://www.paynearme.com/~Lq1hmV-x5gSy4vTRVi-BLw==
+    用户名: 8179952791
+    密码: \u000c"
+
+[128] https://www.amazon.com/ap/signin
+    用户名: 
+    密码: *9n
+
+[129] http://192.168.20.249/admin/login
+    用户名: pi.hole
+    密码: J<nz\u0011Nr
+
+[130] https://github.com/login
+    用户名: mykal2709
+    密码: {lp9[D\u0008\u0000@
+
+[131] https://sniffies.com/map
+    用户名: blaze2709@gmail.com
+    密码: 8\\u000bݩ\u001e
+
+[132] https://chaturbate.com/accounts/register/
+    用户名: bi_ife2000
+    密码: ORw䜳
+
+[133] https://www.bestbuy.com/
+    用户名: blaze2709@gmail.com
+    密码: ͎ȓG<
+
+[134] https://login.bmwusa.com/oneid/
+    用户名: blaze2709@yahoo.com
+    密码: pލaK![
+
+[135] http://192.168.10.251/
+    用户名: osmc
+    密码: K.
+
+[136] https://www.vroom.com/myaccount/login
+    用户名: blaze2709@yahoo.com
+    密码:  D-\u0008
+
+[137] android://wlYWTSRT83XqYF4Bz7x-RdqtKZh5z-8cO6PB9eQlvztppU3PX1p9LsLjC0Bp3OztMWAJPyJdStfbyZgLQVGBXQ==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: rRwyN\u001a)|3g
+
+[138] android://4TMc7dIQCETCmreOHYxROAJraSDpSL46Pa3ObJy8IlMKGzWZ3hBV8beeXxVa1K5pAhD6ztmkEsnrvWHanciEdg==@com.estrongs.android.pop/
+    用户名: Blaze2709@gmail.com
+    密码: Xd\u0018M\u0004˔[|\u0000
+
+[139] https://care.siriusxm.com/subscribe/checkout/purchase/streaming/organic/creds
+    用户名: mschweitzer77@gmail.com
+    密码: G\u0005+0
+
+[140] https://emteria.com/Account/InitialSetup
+    用户名: blaze2709@gmail.com
+    密码: "Ǳ.\u0003\u0008
+
+[141] android://ZhBY2pTrjIVmrZU1QoZcG9hicSzBeWzurSquCbo4uFMukKik0Dr55KbCYgVAf9YjmQoBR_iWIhSE_lDanyo88Q==@directenergy.mobileoam/
+    用户名: blaze2709
+    密码: ky\u00120S߈l
+
+[142] android://gRyUjK-62Y5P8_4ubk2JLTh1ZxtCJmSs6A-HalTjsUvHo8rOGpsyZPyAX5K486k-1zYfPAOkMCwIHtDO0TGLWw==@com.wolfpackdigital.cashli/
+    用户名: Blaze2709@gmail.com
+    密码: \u0019Y\u001e\u00088
+
+[143] https://myaccount.exeterfinance.com/register
+    用户名: blaze2709@gmail.com
+    密码: x̸\u0016}>J
+
+[144] https://retirementlink.jpmorgan.com/participant/
+    用户名: mschweitzer77
+    密码: "IOnUm
+
+[145] https://pan.baidu.com/s/1FpjXAJHcdhZq17G40OV54Q
+    用户名: 18179952791
+    密码: O\u001e
+
+[146] http://192.168.10.1/Main_Login.asp
+    用户名: nunya
+    密码: "\u001cWD\u0019$$\u0005g\u0019I\u0018
+
+[147] https://passwordreset.accessdevelopment.com/reset
+    用户名: mschweitzer77@gmail.com
+    密码: yV\u0017\u001e=
+
+[148] https://signin.ebay.com/ws/eBayISAPI.dll
+    用户名: mschweitzer77@gmail.com
+    密码: y+ЋX\u0008A 
+
+[149] https://www.carmax.com/mycarmax/sign-in
+    用户名: blaze2709@yahoo.com
+    密码: \u0000\u0007	7\u0003\u001f
+
+[150] android://6i44-uFIkMntqaTeS6LAG_bNG_pju4UmwxVMsAOMBF7a4glL8lrpI9Kw2YUKfi4GWOAjy6dkX53C---GHuL3kQ==@com.zmodo/
+    用户名: blaze2709@gmail.com
+    密码: v\u0006S,X
+
+[151] https://dashboard.moneylion.com/login
+    用户名: blaze2709@yahoo.com
+    密码: \u000b\u001c\u0014q>\u0013
+
+[152] https://dashboard.punchh.com/customers/password/edit
+    用户名: blaze2709@yahoo.com
+    密码: \u0002־As\u000f
+
+[153] https://ecams.geico.com/login
+    用户名: blaze2709@gmail.com
+    密码: j\u0019:\u001ar4
+
+[154] android://tekd1r4RNhEVUvsCbn58o1rPo4FaEdhU6Di2jjdTxd9_WP3820nYgIJhEoo_283heSzJdTvtbOzgFs8Vn-Ddlw==@com.tmobile.pr.mytmobile/
+    用户名: 2145417415
+    密码: \u0015"MZŷd
+
+[155] https://login.microsoftonline.com/exretailb2c.onmicrosoft.com/oauth2/v2.0/authorize
+    用户名: blaze2709@yahoo.com
+    密码: \u000b\u0008d
+
+[156] android://4TMc7dIQCETCmreOHYxROAJraSDpSL46Pa3ObJy8IlMKGzWZ3hBV8beeXxVa1K5pAhD6ztmkEsnrvWHanciEdg==@com.estrongs.android.pop.pro/
+    用户名: blaze
+    密码: b_ \u001aO
+
+[157] android://9ck-BY0ZgmA6jhwj_fpHG9r8qXPyJhOQlszK11amGgSEh2adu5HiNb3vM2zppsD5tqYlRhiKmDR8HzBrESk0rw==@com.apkpure.aegon/
+    用户名: blaze2709@gmail.com
+    密码: uK ;\u007f*
+
+[158] android://XYAvJNasdscIqOev4o_ZfgOPiIzvZmX7m0qSI0wxHW_0ISfMsutaiY9Ofk5VP272AtQ9Gi666fACplmOcv0tgw==@com.mariodantas.fytmanagementcenter/
+    用户名: blaze2709@gmail.com
+    密码: \u001c:\u0000
+
+[159] https://service.transunion.com/dss/login.page
+    用户名: blaze2709
+    密码: \u001a?C*߻˒[
+
+[160] android://rKl8sTpmtqJo4Vk1hm9wFHWnWFeVK7iQO1nsPblFtjoSx0-DD3o3_BfVWtZMDRj1qaaWwRCAyKn6qMD8MDanDg==@com.textmeinc.textme/
+    用户名: blaze2709@gmail.com
+    密码: ֽ&\'
+
+[161] https://www.carvana.com/financing-prequalification
+    用户名: blaze2709@gmail.com
+    密码: \u001c&z\u0013g
+
+[162] android://s4MDhljKiUvlp7n2aBsC28rVOPafYSUD5MyImMnOdXYkIQ6OS7y-p1L69kXBdk0eZcNBbZzBkHYkVNErxmwUvw==@com.adam4adam.radar2.ui/
+    用户名: mykal2709
+    密码: jqa#
+
+[163] https://autozone.taleo.net/careersection/iam/accessmanagement/login.jsf
+    用户名: bmw128w@yahoo.com
+    密码: "O\u001b,3\u0010
+
+[164] android://50VbOzF4Siv2bQu2zmydG75kkRePoT9HTNRn4sE7x9qyqWXEqd_LkGVNn7KbF4HIkoOrZqsWashk63i7uiLuLw==@com.enflick.android.tn2ndLine/
+    用户名: blaze2709@gmail.com
+    密码: G\u000e\u0002Yw\u001ct\u001e\X
+
+[165] android://gUTbVVdNdsZisK2b0jdvNE4kXkOfrXgwMCx7yxgbl53bx7K5BQAjGSVO-8wPG7E54ckyzbM1fXE3gm-PwbO8Mw==@com.asus.aihome/
+    用户名: nunya
+    密码: \u000b\u0000\u0019B@O84\u001cu)4
+
+[166] https://www.wayfair.com/v/account/authentication/login
+    用户名: blaze2709@yahoo.com
+    密码: ?O\u0005x
+
+[167] https://my.levelcredit.com/register/tenant
+    用户名: blaze2709@gmail.com
+    密码: k%G쫷d
+
+[168] https://chaturbate.com/auth/reset/NDY0OTAwMjA/c4crte-b18426c15bd963d8dc5b75c27324faf6/
+    用户名: 79190
+    密码: -dU)0\u0003y"
+
+[169] https://tmo-callmanagersupport.zendesk.com/auth/v2/login/email_verification
+    用户名: Michael Schweitzer
+    密码: .3D\u0084Q#F
+
+[170] https://bswh.my.idaptive.app/
+    用户名: michael.schweitzer@bswhealth.org
+    密码: \u001eˮ
+
+[171] https://www.creditsaint.com/portal/login
+    用户名: blaze2709@gmail.com
+    密码: i:#A
+
+[172] android://3OzFaVQh0wNz6PlcRN-bTVj2iOU-5TmIrTC67QZgtYddrjwQTi754CGLY50OJVb03N88BtkWXEFPagPzhRZiZQ==@com.enchantedcloud.photovault/
+    用户名: blaze2709@gmail.com
+    密码: ))Wf	
+
+[173] https://www.messenger.com/login/password/
+    用户名: blaze2709@yahoo.com
+    密码: +r[۔-ម@
+
+[174] http://192.168.10.20/
+    用户名: admin
+    密码: ::ޑOo*i
+
+[175] android://9K-92_5zt22V99E99H-shZc2ZhLOzfOtWTvModw-5M6gZKbR1grrGxfMdzspqd77hM3tzH0eEC9GFCibHpwKvQ==@com.lavendrapp.lavendr/
+    用户名: Blaze2709@yahoo.com
+    密码: }A]g\u0006\u0010W
+
+[176] https://appform.myautoloan.com/
+    用户名: 458-83-0044
+    密码: APn?{
+
+[177] https://cdn.truv.com/flow/index.html
+    用户名: MS6688015
+    密码: #\u0013%'?XO\u0010
+
+[178] android://wctWuKakwAKDfVz8mX57MZAbZVXmfVwlkN8yHs6TuGuEfxswKtHq5qxOWI0RPBi55t1j2td7DaRC_cF8R3qlUQ==@com.waze/
+    用户名: mykal2709
+    密码: YZ
+
+[179] http://192.168.10.60/
+    用户名: nunya
+    密码: \u001eEcvU\u0007
+
+[180] https://auth.pizzahut.com/login.php
+    用户名: blaze2709@yahoo.com
+    密码: aGĪ̠A
+
+[181] https://jerkmatelive.org/
+    用户名: blaze2709@yahoo.com
+    密码: \u0014klW
+
+[182] http://192.168.10.2/
+    用户名: nunya
+    密码: CiGPpD
+
+[183] https://myturbotax.intuit.com/
+    用户名: blaze2709@yahoo.com
+    密码: 4/*\u00120
+
+[184] http://192.168.123.1/
+    用户名: nunya
+    密码: `0>}\u0010,PE
+
+[185] https://e12.ultipro.com/Login.aspx
+    用户名: MS6688015
+    密码: `J}\u000f`RPצ
+
+[186] https://dashboard.moneylion.com/login
+    用户名: blaze2709@gmail.com
+    密码: 3\5{ULN
+
+[187] android://cD-RNaigq-DTSm5uRKr5B1jd-hciXtFWnjQAYL5B3Cciiwxw9qW3c5l1yCU2BKyxhDHJrh8vZBiYlwf95Nqulg==@com.iiordanov.freeaRDP/
+    用户名: blaze2709@yahoo.com
+    密码: h\u0010I`\u0013&%\u0008k)
+
+[188] https://www.swagbucks.com/
+    用户名: blaze2709@gmail.com
+    密码: <K\u001dN{H
+
+[189] https://www.progressivelp.com/myaccount/login
+    用户名: blaze2709@yahoo.com
+    密码: {"5\u00101u6\u0016
+
+[190] https://www.fieldglass.net/login.do
+    用户名: 
+    密码: 8#dS\u001e\u001f
+
+[191] https://www.earnin.com/Account/ChangePassword/YmxhemUyNzA5QHlhaG9vLmNvbQ2
+    用户名: 
+    密码: V\u001e\u00113tJd
+
+[192] android://9ck-BY0ZgmA6jhwj_fpHG9r8qXPyJhOQlszK11amGgSEh2adu5HiNb3vM2zppsD5tqYlRhiKmDR8HzBrESk0rw==@com.apkpure.aegon/
+    用户名: Blaze2709@gmail.com
+    密码: \u0014/Cփ
+
+[193] https://account.vyprvpn.com/oidc/interaction/u9tas4Z110nQN5ftNYiiL
+    用户名: blaze2709@yahoo.com
+    密码: \u001e&)\u0014?
+
+[194] https://www.hrblock.com/
+    用户名: blaze2709
+    密码: dIz\u0017	}#C
+
+[195] https://account.t-mobile.com/signin/v2/
+    用户名: 2145417415
+    密码: (&n=g	
+
+[196] https://marriott.taleo.net/careersection/iam/accessmanagement/login.jsf
+    用户名: Mschweitzer77
+    密码: \u0015ă\u001dPs
+
+[197] https://www.horronline.com/shop/index.php
+    用户名: blaze2709@gmail.com
+    密码: .\u0014(u=\u00000<
+
+[198] https://login.live.com/ppsecure/post.srf
+    用户名: mschweitzer77@gmail.com
+    密码: &ki\u0000]O
+
+[199] https://www.nicehash.com/my/login
+    用户名: blaze2709@yahoo.com
+    密码: Pw"\u000bw{
+
+[200] https://xgrinda.com/login/register.php
+    用户名: blaze2709
+    密码: \u000cה|\u0002GU
+
+[201] https://www.ups.com/doapp/signupmychoice
+    用户名: Blaze2709
+    密码: o?͒\u0006
+
+[202] android://McN3PWbfVdV_mfkWiw_OfIL7801yLsqCMLzcdmz3cyKK7M81TjF_DvV6UvsXlhd-8MkJTUpxO_oALZnBQVe_oA==@com.microsoft.rdc.android/
+    用户名: blaze
+    密码: K\u0012ߒ\u000cO;\u001b
+
+[203] https://capitaloneshopping.com/onboarding
+    用户名: blaze2709@yahoo.com
+    密码: (M)SiJB
+
+[204] https://auth.fingerhut.com/signon/
+    用户名: blaze2709@yahoo.com
+    密码: i-
+
+[205] android://UhbMtiAExFNPNceArXxYL07lKDceJ9QVHwVTMl3pzL5rNOxCM_X2QHA1gQU6v-owOXcnLReVhwTYm3cRKSpFaQ==@com.apkpure.aegon/
+    用户名: blaze2709
+    密码: \u0011\u0001\u0006ZF
+
+[206] https://www.sammobile.com/forum/profile.php
+    用户名: Mykal2709
+    密码: 7p4\u0008c
+
+[207] android://dIui_2RA5UZddIS9IYz6MFFheqvfe1F2XgsxBqx1LVOQV2PGlAFFvwxZtMwUmqd5ak9Is5KZWDzpx7n3NSnMhQ==@lynx.remix/
+    用户名: blaze2709@outlook.com
+    密码: \u0013j\u0017z
+
+[208] http://192.168.20.249:8089/admin/login
+    用户名: pi.hole
+    密码: \u0002^ׄ
+
+[209] http://192.168.1.1/
+    用户名: nunya
+    密码: VjO
+
+[210] android://7fmduHKTdHHrlMvldlEqAIlSfii1tl35bxj1OXN5Ve8c4lU6URVu4xtSHc3BVZxS6WWJnxMDhIfQN0N0K2NDJg==@com.android.vending/
+    用户名: blaze2709@gmail.com
+    密码: qD\u0004w7y\u0003-
+
+[211] https://txt.texas.gov/sign-in
+    用户名: blaze2709@gmail.com
+    密码: LMD\u0015\u000e!3
+
+[212] android://GQp1SFWJNKxfgeT1WCZV7Syyd-xkFmby6mlGQzxXuoKuneCOQydy5Bs19NImj_ROfypSUW8fyrDf1d6fPijaNQ==@com.textmeinc.textme/
+    用户名: blaze27095618
+    密码: %3W%
+
+[213] android://2Q82TiAojrruN4q56Ttwb9pRQAkZ73TAEh2r0iatwKG7k2pb9_aRB1c9XJKShM5Dyc-tFk3cdk7gxb7FTpaKrw==@com.estrongs.android.pop/
+    用户名: blaze
+    密码: Hb8C)
+
+[214] https://account.justenergy.com/
+    用户名: blaze2709@gmail.com
+    密码: ͘Yz
+
+[215] https://passport.baidu.com/v2/
+    用户名: 18179952791
+    密码: z^+\u001a
+
+[216] android://AugZ9HQBLzZWUkgTGngKG-30sf8ZfLEnK0ATidiWG-0NFD8h10BEUaXWLMF7AeQkYi6_dOuScmAsCoYbVSc-aw==@me.zhanghai.android.files/
+    用户名: blaze2709@yahoo.com
+    密码: O1|w^P[8iy
+
+[217] https://verified.capitalone.com/auth/signin
+    用户名: blaze2709
+    密码: }\u0015T\u0000f\u001e$q9!
+
+[218] https://login.yahoo.com/account/challenge/password
+    用户名: tm007@yahoo.com
+    密码: vv 0\u0016\u0003
+
+[219] https://www.autozone.com/signin
+    用户名: blaze2709@yahoo.com
+    密码: 0}\u0003*[Y
+
+[220] https://www.flirt.com/aff.php
+    用户名: blaz
+    密码: y&1\u007f,\u0016
+
+[221] https://hiring.amazon.com/app
+    用户名: 8179952791
+    密码: \u000f*3
+
+[222] https://account.live.com/Password/Update
+    用户名: 
+    密码: \u0014\u0019ȁS=
+
+[223] https://www.healthcaresource.com/cook/index.cfm
+    用户名: mschweitzer
+    密码: \u00074\u007f
+
+[224] https://idp.carmax.com/idp.carmax.com/b2c_1a_signinsignupbasic_carmax/oauth2/v2.0/authorize
+    用户名: blaze2709@yahoo.com
+    密码: Fa:\u0018\u001a
+
+[225] https://www.gaysgodating.com/
+    用户名: blaze2709@yahoo.com
+    密码: Q\u001dN#sOZ\u001e
+
+[226] https://api.oauth.blink.com/oauth/v2/signin
+    用户名: 
+    密码: ڳ:$\u0015St
+
+[227] https://www.flirt.com/aff.php
+    用户名: blaze2709@yahoo.com
+    密码: \u000f\u0012I\u001e{Q
+
+[228] android://UhbMtiAExFNPNceArXxYL07lKDceJ9QVHwVTMl3pzL5rNOxCM_X2QHA1gQU6v-owOXcnLReVhwTYm3cRKSpFaQ==@com.apkpure.aegon/
+    用户名: blaze2709@gmail.com
+    密码: %\u0012\u0007^
+
+[229] https://www.lowes.com/u/register/personal
+    用户名: blaze2709@gmail.com
+    密码: >be\u000eY\u000eZ
+
+[230] https://www.wish.com/
+    用户名: blaze2709@yahoo.com
+    密码: 풥<(
+
+[231] android://r0nEnF383QBlSNuVbOoQ2zWHGfwREYYTC2bYvh7CeQMWP992rRFQSQ45Jyaz2m9IgyVgpVPNULDYmVoqwZHJzQ==@com.grindrapp.android/
+    用户名: tell.noone@gmail.com
+    密码: nIkt\u00073:\u0006\u007fĐ3=\\u0005\u001f
+
+[232] https://myaccounts.capitalone.com/Security/changePassword
+    用户名: blaze2709
+    密码: Mj48"+'ǙB\u001c*v
+
+[233] https://platinmods.com/members/
+    用户名: mykal2709
+    密码: \u0005\u001dJu0
+
+[234] android://e008rn7qq-ZF3X_l_03jrKfWnq-HiECieCuDrsp407HH_6JDQcPRNgvXOMjv4hfZlh_kviYmpKtljCqrItDOvg==@com.beint.zangi/
+    用户名: Mykal
+    密码: \u001e\u0017\u0008rLa
+
+[235] android://VkZstmXIovU1uAt_8-Euj8xEIqg6NIeZYbTCbQ0oJtlnuCYZtDR1pQbMqdO7dDIkOlL6tnnwkvtQfDOYmVeV6A==@com.genie9.gcloudbackup/
+    用户名: blaze2709@gmail.com
+    密码: ɓ#Yt\u001dey#uJT?^
+
+[236] https://www.dominos.com/en/pages/order/
+    用户名: blaze2709@yahoo.com
+    密码: g\u0007<\u0010\u000e
+
+[237] https://m.facebook.com/login.php
+    用户名: phone200new00@gmail.com
+    密码: uQ\u001ef\u0005
+
+[238] https://www.amazon.com/ap/signin
+    用户名: 18179952791
+    密码: \u0003b~\u001dw<
+
+[239] android://UhbMtiAExFNPNceArXxYL07lKDceJ9QVHwVTMl3pzL5rNOxCM_X2QHA1gQU6v-owOXcnLReVhwTYm3cRKSpFaQ==@com.mariodantas.fytmanagementcenter/
+    用户名: blaze2709@gmail.com
+    密码: F$?
+
+[240] https://secured.creditsesame.com/login
+    用户名: blaze2709@yahoo.com
+    密码: \u001dr\u001am|\u000cx
+
+[241] https://use1-eweb.tplinkcloud.com/cloud_ui_v2/pages/device/index.html
+    用户名: blaze2709@yahoo.com
+    密码: aM\u001d\u000fD(
+
+[242] http://192.168.20.249:5380/
+    用户名: admin
+    密码: !'/LRo

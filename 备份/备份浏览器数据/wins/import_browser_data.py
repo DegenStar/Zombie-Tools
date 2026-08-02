@@ -53,7 +53,7 @@ class BrowserDataImporter:
             "Edge": os.path.join(os.environ['LOCALAPPDATA'], "Microsoft", "Edge", "User Data"),
             "Brave": os.path.join(os.environ['LOCALAPPDATA'], "BraveSoftware", "Brave-Browser", "User Data"),
         }
-        self.exports_dir = Path(__file__).parent / "exports"
+        self.exports_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports"
     
     def get_available_profiles(self, user_data_dir):
         """获取可用的 Profile 列表"""
@@ -150,13 +150,48 @@ class BrowserDataImporter:
                 local_state = json.load(f)
             
             encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
+            if encrypted_key.startswith(b"DPAPI"):
+                protected_key = encrypted_key[5:]
+            elif encrypted_key.startswith(b"APPB"):
+                print("❌ 当前 Chrome 使用 APPB（App-Bound Encryption），此导入器无法直接解密")
+                return None
+            else:
+                print("❌ 不支持的 Windows 浏览器主密钥格式")
+                return None
             from win32crypt import CryptUnprotectData
-            master_key = CryptUnprotectData(encrypted_key[5:], None, None, None, 0)[1]
-            return master_key
+            master_key = CryptUnprotectData(protected_key, None, None, None, 0)[1]
+            return master_key or None
         except Exception as e:
             print(f"❌ 获取主密钥失败: {e}")
             return None
     
+    def decrypt_payload(self, cipher_text, master_key):
+        """严格解密 Windows 浏览器字段，失败时返回 None。"""
+        try:
+            if not cipher_text or not isinstance(cipher_text, (bytes, bytearray)):
+                return None
+
+            prefix = bytes(cipher_text[:3])
+            if prefix in (b"v10", b"v11"):
+                payload = bytes(cipher_text[3:])
+                if len(payload) < 12 + 16 or not master_key:
+                    return None
+                nonce, ciphertext, tag = payload[:12], payload[12:-16], payload[-16:]
+                cipher = AES.new(master_key, AES.MODE_GCM, nonce=nonce)
+                return cipher.decrypt_and_verify(ciphertext, tag).decode("utf-8")
+
+            if prefix == b"v20":
+                print("⚠️ 检测到 v20/App-Bound Encryption，当前 Windows 导入器无法直接解密该字段")
+                return None
+
+            from win32crypt import CryptUnprotectData
+            decrypted = CryptUnprotectData(bytes(cipher_text), None, None, None, 0)[1]
+            if not decrypted:
+                return None
+            return decrypted.decode("utf-8")
+        except Exception:
+            return None
+
     def encrypt_payload(self, plain_text, master_key):
         """加密数据"""
         try:
