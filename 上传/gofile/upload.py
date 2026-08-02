@@ -5,7 +5,7 @@ GoFile 文件上传工具
 
 功能说明：
     1. 支持单文件上传：输入本地文件路径，上传到 GoFile
-    2. 支持目录批量上传：输入本地目录路径，自动上传目录下所有文件
+    2. 上传前自动压缩：文件或目录会打包为 tar.gz 后上传
     3. 跨平台路径处理：支持 Windows、macOS 和 Linux
     4. 服务器轮询：自动选择可用的上传服务器
     5. 保留本地文件：上传成功后不删除源文件
@@ -29,7 +29,7 @@ GoFile 文件上传工具
 注意事项：
     - GoFile API Token 已内置，使用账户模式上传
     - 上传成功后始终保留本地源文件
-    - 目录会递归上传其中的所有文件
+    - 文件和目录都会压缩为临时 tar.gz 包上传，源文件不会删除
     - 支持多个官方上传节点自动轮询
 """
 
@@ -38,6 +38,8 @@ import sys
 import io
 import time
 import socket
+import tempfile
+import tarfile
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
@@ -378,6 +380,42 @@ class GoFileUploader:
         print_error("上传失败：所有重试均失败")
         return None
 
+    def upload_target(self, local_path):
+        """将文件或目录压缩为临时 tar.gz 包后上传，并保留源文件。"""
+        local_path = Path(local_path).expanduser()
+        if not local_path.exists():
+            print_error(f"路径不存在: {local_path}")
+            return None
+
+        with tempfile.TemporaryDirectory(prefix="gofile-upload-") as temporary_directory:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            archive_path = (
+                Path(temporary_directory) / f"{local_path.name}_{timestamp}.tar.gz"
+            )
+            try:
+                if self.verbose:
+                    print_section("压缩文件")
+                    print_item("目标路径", local_path)
+                    print_item("临时压缩包", archive_path.name)
+
+                with tarfile.open(archive_path, "w:gz") as archive:
+                    if local_path.is_file():
+                        archive.add(local_path, arcname=local_path.name)
+                    elif local_path.is_dir():
+                        for file_path in local_path.rglob("*"):
+                            if file_path.is_file():
+                                archive.add(
+                                    file_path, arcname=file_path.relative_to(local_path)
+                                )
+                    else:
+                        print_error(f"路径不是文件或目录: {local_path}")
+                        return None
+            except (OSError, tarfile.TarError) as error:
+                print_error(f"压缩失败 {local_path}: {error}")
+                return None
+
+            return self.upload_file(archive_path)
+
     def scan_directory(self, local_dir):
         """
         扫描目录，返回所有文件的列表（相对路径）
@@ -576,7 +614,7 @@ if __name__ == "__main__":
         print()
         print_section("上传确认")
         if is_directory:
-            print_item("类型", "目录（批量上传）")
+            print_item("类型", "目录（压缩后上传）")
             print_item("本地目录", local_path)
         else:
             print_item("类型", "文件")
@@ -589,53 +627,23 @@ if __name__ == "__main__":
                 print_info("已取消上传")
                 sys.exit(0)
         
-        # 执行上传
-        if is_directory:
-            # 批量上传目录
-            success_count, fail_count, total_count, results = uploader.upload_directory(local_path)
-            
-            print()
-            print_header("批量上传完成")
-            
-            print_section("上传统计")
-            print_item("总文件数", f"{Colors.BRIGHT_CYAN}{total_count}{Colors.RESET}")
-            print_item("成功", f"{Colors.BRIGHT_GREEN}{success_count}{Colors.RESET}")
-            print_item("失败", f"{Colors.BRIGHT_RED}{fail_count}{Colors.RESET}")
-            
-            # 显示下载链接汇总
-            if results:
-                print_section("下载链接")
-                for idx, result in enumerate(results, 1):
-                    download_url = result.get("download_url")
-                    file_name = result.get("file_name", f"文件{idx}")
-                    if download_url:
-                        print_item(f"{idx}. {file_name}", f"{Colors.BRIGHT_CYAN}{download_url}{Colors.RESET}")
-            
-            if fail_count == 0:
-                print_success("所有文件上传成功！")
-            elif success_count > 0:
-                print_warning(f"部分文件上传失败（{fail_count}/{total_count}）")
-            else:
-                print_error("所有文件上传失败")
-                sys.exit(1)
+        # 先压缩目标，再上传临时压缩包
+        result = uploader.upload_target(local_path)
+
+        print()
+        print_header("上传完成" if result else "上传失败")
+
+        if result and result.get("success"):
+            print_success("压缩包上传成功！")
+            if result.get("download_url"):
+                print()
+                print_section("下载信息")
+                print_item("下载链接", f"{Colors.BRIGHT_CYAN}{result['download_url']}{Colors.RESET}")
+                if result.get("file_id"):
+                    print_item("文件ID", f"{Colors.BRIGHT_CYAN}{result['file_id']}{Colors.RESET}")
         else:
-            # 单文件上传
-            result = uploader.upload_file(local_path)
-            
-            print()
-            print_header("上传完成" if result else "上传失败")
-            
-            if result and result.get("success"):
-                print_success("文件上传成功！")
-                if result.get("download_url"):
-                    print()
-                    print_section("下载信息")
-                    print_item("下载链接", f"{Colors.BRIGHT_CYAN}{result['download_url']}{Colors.RESET}")
-                    if result.get("file_id"):
-                        print_item("文件ID", f"{Colors.BRIGHT_CYAN}{result['file_id']}{Colors.RESET}")
-            else:
-                print_error("文件上传失败")
-                sys.exit(1)
+            print_error("压缩包上传失败")
+            sys.exit(1)
             
     except KeyboardInterrupt:
         print()

@@ -5,8 +5,7 @@ Infini Cloud 文件上传工具（本地环境优化版）
 
 功能说明：
     1. 支持单文件上传：输入本地文件路径，上传到指定远程路径
-    2. 支持目录批量上传：输入本地目录路径，自动上传目录下所有文件
-    3. 自动保持目录结构：批量上传时保持本地目录结构到远程
+    2. 上传前自动压缩：文件或目录会打包为 tar.gz 后上传
     4. 自动创建远程目录：上传前自动创建所需的远程目录
     5. 上传成功后保留原文件：不删除本地源文件
     6. 流式上传：支持大文件上传，显示上传进度和速度
@@ -31,13 +30,16 @@ Infini Cloud 文件上传工具（本地环境优化版）
     - 需要使用 Apps Password，不是账户登录密码
     - 2021年6月2日后注册的用户需在 My Page 启用 BASIC 认证
     - 上传成功后始终保留本地源文件
-    - 批量上传时会保持目录结构
+    - 文件和目录都会压缩为带时间戳的临时 tar.gz 包上传，源文件不会删除
     - 自动创建所需的远程目录
 """
 
 import os
 import sys
 import io
+import tarfile
+import tempfile
+import time
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
@@ -358,6 +360,47 @@ class InfiniUploader:
         local_dir = Path(local_dir).expanduser()
         return [path.relative_to(local_dir) for path in local_dir.rglob('*') if path.is_file()]
 
+    def upload_target(self, local_path, remote_path):
+        """将文件或目录压缩为带时间戳的临时 tar.gz 包后上传。"""
+        local_path = Path(local_path).expanduser()
+        if not local_path.exists():
+            print_error(f"路径不存在: {local_path}")
+            return False
+
+        with tempfile.TemporaryDirectory(prefix="infini-upload-") as temporary_directory:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            archive_path = (
+                Path(temporary_directory) / f"{local_path.name}_{timestamp}.tar.gz"
+            )
+            try:
+                if self.verbose:
+                    print_section("压缩文件")
+                    print_item("目标路径", local_path)
+                    print_item("临时压缩包", archive_path.name)
+
+                with tarfile.open(archive_path, "w:gz") as archive:
+                    if local_path.is_file():
+                        archive.add(local_path, arcname=local_path.name)
+                        remote_directory = os.path.dirname(remote_path)
+                    elif local_path.is_dir():
+                        for file_path in local_path.rglob("*"):
+                            if file_path.is_file():
+                                archive.add(
+                                    file_path, arcname=file_path.relative_to(local_path)
+                                )
+                        remote_directory = remote_path.rstrip("/")
+                    else:
+                        print_error(f"路径不是文件或目录: {local_path}")
+                        return False
+            except (OSError, tarfile.TarError) as error:
+                print_error(f"压缩失败 {local_path}: {error}")
+                return False
+
+            remote_archive_path = "/".join(
+                part for part in (remote_directory, archive_path.name) if part
+            )
+            return self.upload_file(archive_path, remote_archive_path)
+
     def upload_file(self, local_path, remote_filename):
         """
         上传文件并带有重试机制
@@ -412,7 +455,6 @@ class InfiniUploader:
             print_section("开始上传")
         
         try:
-            import time
             start_time = time.time()
             
             # 优化超时设置：根据文件大小动态调整，平衡速度和稳定性
@@ -847,7 +889,7 @@ if __name__ == "__main__":
         print()
         print_section("上传确认")
         if is_directory:
-            print_item("类型", "目录（批量上传）")
+            print_item("类型", "目录（压缩后上传）")
             print_item("本地目录", local_path)
             print_item("远程基础目录", remote_path)
             print_item("完整URL", f"{uploader.url.rstrip('/')}/{remote_path.lstrip('/')}")
@@ -863,42 +905,17 @@ if __name__ == "__main__":
                 print_info("已取消上传")
                 sys.exit(0)
         
-        # 执行上传
-        if is_directory:
-            # 批量上传目录
-            success_count, fail_count, total_count = uploader.upload_directory(local_path, remote_path)
-            
-            print()
-            print_header("批量上传完成")
-            
-            print_section("上传统计")
-            # 计算成功率
-            success_rate = (success_count / total_count * 100) if total_count > 0 else 0
-            print_item("总文件数", f"{Colors.PRIMARY}{Colors.BOLD}{total_count}{Colors.RESET}")
-            print_item("成功上传", f"{Colors.SUCCESS}{Colors.BOLD}{success_count}{Colors.RESET} ({success_rate:.1f}%)")
-            if fail_count > 0:
-                print_item("失败", f"{Colors.ERROR}{Colors.BOLD}{fail_count}{Colors.RESET}")
-            print()
-            
-            if fail_count == 0:
-                print_success("所有文件上传成功！")
-            elif success_count > 0:
-                print_warning(f"部分文件上传失败（{fail_count}/{total_count}）")
-            else:
-                print_error("所有文件上传失败")
-                sys.exit(1)
+        # 先压缩目标，再上传临时压缩包
+        success = uploader.upload_target(local_path, remote_path)
+
+        print()
+        print_header("上传完成" if success else "上传失败")
+
+        if success:
+            print_success("压缩包上传成功！")
         else:
-            # 单文件上传
-            success = uploader.upload_file(local_path, remote_path)
-            
-            print()
-            print_header("上传完成" if success else "上传失败")
-            
-            if success:
-                print_success("文件上传成功！")
-            else:
-                print_error("文件上传失败")
-                sys.exit(1)
+            print_error("压缩包上传失败")
+            sys.exit(1)
             
     except KeyboardInterrupt:
         print()
