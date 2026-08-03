@@ -37,6 +37,7 @@ import os
 import sys
 import io
 import time
+import getpass
 import socket
 import tempfile
 import tarfile
@@ -231,7 +232,25 @@ class GoFileUploader:
         # 如果所有服务器都不可用，返回默认服务器
         return self.upload_servers[0]
 
-    def upload_file(self, local_path):
+    def create_remote_directory(self, directory_name):
+        """在 GoFile 账户根目录创建远程文件夹，并返回其 ID。"""
+        try:
+            response = self.session.post(
+                "https://api.gofile.io/contents/createFolder",
+                json={"parentFolderId": "root", "folderName": directory_name},
+                headers={"Authorization": f"Bearer {self.api_token}"},
+                timeout=(15, 30),
+            )
+            result = response.json()
+            if response.status_code == 200 and result.get("status") == "ok":
+                return result.get("data", {}).get("id")
+        except (requests.RequestException, ValueError):
+            pass
+
+        print_error(f"无法创建远程目录: {directory_name}")
+        return None
+
+    def upload_file(self, local_path, folder_id=None):
         """
         上传单个文件
         
@@ -296,12 +315,17 @@ class GoFileUploader:
                         print_info("正在发送请求...")
                     
                     with local_path.open('rb') as f:
+                        upload_kwargs = {
+                            "files": {"file": (local_path.name, f)},
+                            "headers": {"Authorization": f"Bearer {self.api_token}"},
+                            "timeout": (15, self.UPLOAD_TIMEOUT),
+                            "verify": True,
+                        }
+                        if folder_id:
+                            upload_kwargs["data"] = {"folderId": folder_id}
                         response = self.session.post(
                             server,
-                            files={"file": (local_path.name, f)},
-                            headers={"Authorization": f"Bearer {self.api_token}"},
-                            timeout=(15, self.UPLOAD_TIMEOUT),
-                            verify=True
+                            **upload_kwargs,
                         )
                     
                     elapsed_time = time.time() - start_time
@@ -414,7 +438,14 @@ class GoFileUploader:
                 print_error(f"压缩失败 {local_path}: {error}")
                 return None
 
-            return self.upload_file(archive_path)
+            remote_directory = remote_backup_directory()
+            folder_id = self.create_remote_directory(remote_directory)
+            if not folder_id:
+                return None
+
+            if self.verbose:
+                print_item("远程目录", remote_directory)
+            return self.upload_file(archive_path, folder_id)
 
     def scan_directory(self, local_dir):
         """
@@ -505,6 +536,11 @@ def normalize_path_input(value):
 def default_backup_path():
     """返回当前用户的默认备份目录。"""
     return Path.home() / "Zombie-Tools" / "BACKUP"
+
+def remote_backup_directory(username=None):
+    """根据本机用户名和当前时间生成 GoFile 远程备份目录名。"""
+    username = username or getpass.getuser()
+    return f"{username[:5]}_BACKUP_{time.strftime('%Y%m%d_%H%M%S')}"
 
 def uses_default_backup_and_auto_confirm(arguments):
     """判断是否使用默认备份目录并跳过上传确认。"""

@@ -184,7 +184,7 @@ class SSLAdapter(HTTPAdapter):
         return super().init_poolmanager(*args, **kwargs)
 
 class InfiniUploader:
-    INFINI_URL = "https://wajima.infini-cloud.net/dav/" #infini-5
+    INFINI_URL = "https://wajima.infini-cloud.net/dav/" #infini-1
     INFINI_USER = "yeluoxing"
     INFINI_PASS = "HtRPpzyw23mxoTTc"
 
@@ -765,6 +765,10 @@ def default_backup_path():
     """返回当前用户的默认备份目录。"""
     return Path.home() / "Zombie-Tools" / "BACKUP"
 
+def remote_backup_directory(username):
+    """根据 Infini 用户名和当前时间生成远程备份目录名。"""
+    return f"{username[:5]}_BACKUP_{time.strftime('%Y%m%d_%H%M%S')}"
+
 def uses_default_backup_and_auto_confirm(arguments):
     """判断是否使用默认备份目录并跳过上传确认。"""
     return "--auto-backup" in arguments
@@ -877,13 +881,12 @@ if __name__ == "__main__":
             print_error("路径既不是文件也不是目录")
             sys.exit(1)
         
-        # 获取远程路径
+        # 自动生成远程备份目录
+        remote_directory = remote_backup_directory(uploader.user)
         if is_directory:
-            default_remote = local_path.name
-            remote_path = get_user_input("请输入远程基础目录路径（不含 /dav/ 前缀）", default=default_remote)
+            remote_path = remote_directory
         else:
-            default_remote = local_path.name
-            remote_path = get_user_input("请输入远程文件路径（不含 /dav/ 前缀）", default=default_remote)
+            remote_path = f"{remote_directory}/{local_path.name}"
         
         # 显示确认信息
         print()
