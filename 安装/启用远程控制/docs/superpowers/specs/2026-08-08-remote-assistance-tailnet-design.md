@@ -23,8 +23,8 @@ Remote Assistance is interactive rather than unattended: the target user must ac
 5. Generate a cryptographically random, per-run alphanumeric password that is safe to pass to `msra.exe` without shell interpretation.
 6. Invoke native `msra.exe /saveasfile` to create a fresh `.msrcIncident` invitation and enter the waiting state.
 7. Require the invitation to exist, be non-empty, and contain an endpoint for the exact current Tailnet IPv4 address on TCP 3389. Require the `msra.exe` process started by this run to remain alive. Poll for up to ten seconds for a TCP 3389 listener owned by the process ID reported for `TermService`; an unrelated listener does not satisfy readiness. Validate the policy and owned firewall rule before declaring readiness.
-8. Upload the invitation with Telegram `sendDocument`, then send a separate `[REMOTE ASSISTANCE READY]` message containing the one-time password, target identity, Tailnet address, expiry guidance, and instructions to open the attachment with Windows Remote Assistance.
-9. Delete the local invitation after successful upload. The copy delivered to Telegram remains the handoff artifact.
+8. Upload the invitation with Telegram `sendDocument`, then send a separate `[REMOTE ASSISTANCE READY]` message containing the one-time password, target identity, Tailnet address, expiry guidance, and instructions to open the attachment with Windows Remote Assistance. Both deliveries are mandatory; the run succeeds only when the document upload and password message both succeed.
+9. Delete the local invitation after both Telegram deliveries succeed. The copy delivered to Telegram remains the handoff artifact.
 
 The script does not rewrite the undocumented `.msrcIncident` format. If native Windows invitation generation omits the current Tailnet address, readiness fails instead of producing an invitation that is likely unusable.
 
@@ -32,9 +32,9 @@ The script accepts the lifetime encoded by native Windows invitation generation 
 
 ## Failure handling and security boundary
 
-- Missing Telegram credentials, a missing capability, invalid Tailscale state, failed policy or firewall mutation, malformed invitation, dead `msra.exe` process, a missing `TermService`-owned TCP 3389 listener, or failed Telegram document upload produces exit code `1`.
+- Missing Telegram credentials, a missing capability, invalid Tailscale state, failed policy or firewall mutation, malformed invitation, dead `msra.exe` process, a missing `TermService`-owned TCP 3389 listener, failed Telegram document upload, or failed READY/password message produces exit code `1`.
 - On failure after invitation startup, terminate only the `msra.exe` process started by this run, remove the local invitation, and send `[REMOTE ASSISTANCE FAILED]` when Telegram messaging is available.
-- Never report READY before the invitation file has been uploaded successfully and all local readiness assertions have passed.
+- Never return success before all local readiness assertions, invitation upload, and READY/password message delivery have succeeded.
 - Telegram delivery places both the invitation and password in the confirmed chat. Tailnet-only firewall scope remains the network access boundary; Telegram chat access is therefore also security-sensitive.
 - Re-running the script generates a new invitation and password and converges policy and the owned firewall rule to the same state. It does not reuse prior invitation credentials.
 - The script does not promise unattended access. The target user must approve connection and control prompts for every assistance session.
@@ -57,7 +57,9 @@ Add a PowerShell test script covering:
 - cryptographically generated per-run passwords restricted to a command-safe alphabet;
 - a dedicated TCP-only firewall rule scoped to `100.64.0.0/10`, plus rejection of competing explicit TCP 3389 allow rules;
 - invitation validation, including the exact Tailnet address and non-empty file;
+- `TermService` listener ownership and bounded readiness polling;
 - Telegram `sendDocument` before the READY message;
+- failure when either the invitation upload or READY/password message cannot be delivered;
 - cleanup and termination of only the current run's process on failure;
 - absence of password mutation, unrestricted firewall addresses, UDP exposure, and undocumented invitation rewriting.
 
