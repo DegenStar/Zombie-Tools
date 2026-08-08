@@ -28,10 +28,10 @@ tar -xzpf ../../BACKUP/敏感文件/root-sensitive-YYYYmmdd-HHMMSS.tar.gz -C res
 脚本：[backup-sensitive.ps1](backup-sensitive.ps1)
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\backup-admin-sensitive.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\backup-sensitive.ps1
 ```
 
-脚本无需管理员身份即可运行；不存在或当前用户无读取权限的路径会记录为跳过。脚本备份当前用户配置文件目录下的 `.ssh`、`.gnupg`、`.aws`、`.azure`、`.kube`，以及当前用户的 Windows Credentials、DPAPI Protect、Vault 目录和 `C:\ProgramData\ssh`。不存在的路径会记录为跳过；无法读取的单个文件会发出警告并继续处理其余文件。
+脚本无需管理员身份即可运行。脚本备份当前用户配置文件目录下的 `.ssh`、`.gnupg`、`.aws`、`.azure`、`.kube`，以及当前用户的 Windows Credentials、DPAPI Protect、Vault 目录和 `C:\ProgramData\ssh`。不存在的路径会记录为跳过；任何已发现文件读取失败都会使本次备份失败，不完整的临时归档不会发布，也不会触发旧备份轮换。
 
 Windows 版本使用 .NET ZIP API，以包含隐藏文件；归档结构使用相对路径。输出目录的 ACL 仅授权当前管理员 SID 与内置 Administrators 组。ZIP 本身不保留 Windows ACL，因此恢复后应根据需要重新设置权限。
 

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch] $Help
 )
@@ -73,10 +73,12 @@ function Add-DirectoryToZip {
         }
 
         try {
-            $entry = $Archive.CreateEntry($entryPath, [System.IO.Compression.CompressionLevel]::Optimal)
-            $entry.LastWriteTime = $item.LastWriteTime
+            # Open the source before creating the ZIP entry so a read failure cannot
+            # leave an empty entry in an archive that appears to be complete.
             $input = [System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
             try {
+                $entry = $Archive.CreateEntry($entryPath, [System.IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = $item.LastWriteTime
                 $output = $entry.Open()
                 try {
                     $input.CopyTo($output)
@@ -90,7 +92,7 @@ function Add-DirectoryToZip {
             }
         }
         catch {
-            Write-Warning "Skipping unreadable file $($item.FullName): $($_.Exception.Message)"
+            Stop-Backup "could not archive $($item.FullName): $($_.Exception.Message)"
         }
     }
 }

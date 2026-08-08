@@ -7,7 +7,7 @@
     功能:
       1. 从 tailscale status --json 枚举同 tailnet 的设备, 在线优先, 交互式编号选择
       2. 传输前逐项体检 (Tailscale 服务 / 设备在线 / 22 端口可达 / 免密登录 / 远端 rsync)
-      3. 优先 rsync (若本机有), 缺失时回退 scp -r (随 OpenSSH 自带, Windows 必定可用)
+      3. 优先使用能正确识别 Windows 源路径的 rsync, 否则回退 scp -r
       4. 传输前打印预览 (源大小、文件数、目标路径、实际命令) 并要求确认
 
     本脚本独立自足, 不依赖 SETUP.ps1。除远端 mkdir 外不改动任何一侧的系统配置。
@@ -369,6 +369,18 @@ function Format-ByteSize {
     return ('{0:N1}{1}' -f $Bytes, $units[$i])
 }
 
+# Windows 上的 rsync 可能来自 Cygwin / MSYS / WSL。仅找到可执行文件并不代表它能
+# 正确识别 C:\... 或 UNC 路径；先用只读的 --list-only 验证即将传入的确切源路径。
+function Test-LocalRsyncSource {
+    param([string]$RsyncExe, [string]$Path)
+    try {
+        $null = & $RsyncExe --list-only --protect-args $Path 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -384,6 +396,14 @@ function Invoke-CopyToPeer {
     }
 
     if ($List) { Write-PeerTable $peers; return 0 }
+
+    # OpenSSH Client 是 Windows 可选功能，不能假定每台机器都已安装。
+    if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
+        Stop-WithError '未找到 ssh.exe, 请先安装 Windows OpenSSH Client。'
+    }
+    if (-not (Get-Command scp -ErrorAction SilentlyContinue)) {
+        Stop-WithError '未找到 scp.exe, 请先安装 Windows OpenSSH Client。'
+    }
 
     # --- 选择目标设备 ---
     $peer = $null
@@ -467,8 +487,12 @@ function Invoke-CopyToPeer {
     }
 
     # --- 决定后端 ---
-    $hasLocalRsync = [bool](Get-Command rsync -ErrorAction SilentlyContinue)
-    $backend = if ((-not $Scp) -and $script:RemoteHasRsync -and $hasLocalRsync) { 'rsync' } else { 'scp' }
+    $localRsync = Get-Command rsync -ErrorAction SilentlyContinue
+    $rsyncCanReadSource = $false
+    if ((-not $Scp) -and $script:RemoteHasRsync -and $localRsync) {
+        $rsyncCanReadSource = Test-LocalRsyncSource -RsyncExe $localRsync.Source -Path $source.FullName
+    }
+    $backend = if ($rsyncCanReadSource) { 'rsync' } else { 'scp' }
 
     # --- 预览 ---
     Write-Section '传输预览'
@@ -484,7 +508,7 @@ function Invoke-CopyToPeer {
     $target = "$userName@$($peer.Ip):"
     if ($backend -eq 'rsync') {
         # --protect-args 让远端路径免于二次 shell 拆分, 天然支持空格 / CJK
-        $exe  = 'rsync'
+        $exe  = $localRsync.Source
         $argv = @('-avz', '--partial', '--human-readable', '--progress', '--protect-args',
                   '-e', "ssh -p $Port -o StrictHostKeyChecking=accept-new",
                   $source.FullName, ($target + $destination))
@@ -508,17 +532,26 @@ function Invoke-CopyToPeer {
 
     # --- 远端建目录 (仅当目标以 / 结尾, 明确是目录时) ---
     if ($destination.EndsWith('/') -and -not $DryRun) {
-        try {
-            if ($script:RemoteIsWindows) {
-                # Windows OpenSSH 默认 shell 可能是 cmd.exe, mkdir -p 不可用
-                $psCmd = "New-Item -ItemType Directory -Force -Path '$destination' | Out-Null"
-                $null = & ssh -p $Port -o StrictHostKeyChecking=accept-new "$userName@$($peer.Ip)" `
-                            "powershell -NoProfile -Command `"$psCmd`"" 2>$null
-            } else {
-                $null = & ssh -p $Port -o StrictHostKeyChecking=accept-new "$userName@$($peer.Ip)" `
-                            ("mkdir -p " + (ConvertTo-RemotePath $destination)) 2>$null
-            }
-        } catch {}
+        if ($script:RemoteIsWindows) {
+            # 用 -EncodedCommand 传递完整脚本，目标路径不参与 cmd.exe / PowerShell 的
+            # 命令行解析；-LiteralPath 同时避免 []、* 等字符被当作通配符。
+            $pathBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($destination))
+            $remoteScript = "`$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$pathBase64')); New-Item -ItemType Directory -Force -LiteralPath `$p | Out-Null"
+            $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteScript))
+            $null = & ssh -p $Port -o StrictHostKeyChecking=accept-new "$userName@$($peer.Ip)" `
+                        "powershell -NoProfile -NonInteractive -EncodedCommand $encodedCommand" 2>$null
+        } else {
+            $null = & ssh -p $Port -o StrictHostKeyChecking=accept-new "$userName@$($peer.Ip)" `
+                        ("mkdir -p " + (ConvertTo-RemotePath $destination)) 2>$null
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ''
+            Write-Part "无法在目标设备创建目录: $destination" 'Red'
+            Write-Part '请检查目标路径与写入权限，传输尚未开始。' 'DarkGray'
+            Write-Host ''
+            return 1
+        }
     }
 
     if ($backend -eq 'scp' -and $DryRun) {

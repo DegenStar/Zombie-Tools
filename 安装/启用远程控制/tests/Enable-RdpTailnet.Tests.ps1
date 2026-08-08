@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:Passes = 0
 $root = Split-Path -Parent $PSScriptRoot
-$scriptPath = Join-Path $root '远程控制设置/启用-RDP-Tailnet.ps1'
+$scriptPath = Join-Path $root '启用-RDP-Tailnet.ps1'
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -80,6 +80,8 @@ Test-Case 'firewall allows only Tailnet TCP and UDP 3389' {
     Assert-True ($source -match 'RDP-Tailscale-TCP') 'dedicated TCP rule is missing'
     Assert-True ($source -match 'RDP-Tailscale-UDP') 'dedicated UDP rule is missing'
     Assert-True ($source -match 'Disable-NetFirewallRule') 'existing 3389 allow rules are not disabled'
+    Assert-True ($source -match 'Enable-NetFirewallRule') 'disabled rules are not restored after a failure'
+    Assert-True ($source -match 'createdRuleNames[\s\S]*Remove-NetFirewallRule') 'new rules are not removed after a failure'
     Assert-True ($source -match 'function\s+Assert-NoCompetingRdpFirewallRules') 'competing 3389 rules are not rejected before READY'
     Assert-True ($source -match '-RemoteAddress\s+\$script:TailnetCidr|-RemoteAddress\s+["'']?100\.64\.0\.0/10') 'firewall is not scoped to Tailnet CIDR'
     Assert-True ($source -notmatch '-RemoteAddress\s+["'']?(Any|\*)') 'firewall permits unrestricted remote addresses'
@@ -89,6 +91,7 @@ Test-Case 'ready status requires end-to-end local checks' {
     Assert-True ($source -match 'function\s+Assert-RdpReady') 'missing RDP readiness assertion'
     Assert-True ($source -match 'Get-NetTCPConnection') 'TCP 3389 listener is not checked'
     Assert-True ($source -match 'PortNumber') 'configured RDP port is not fixed and validated'
+    Assert-True ($source -match '\$rdpTcp\.MinEncryptionLevel\s+-ne\s+3') 'minimum RDP encryption level is not validated'
     Assert-True ($source -match 'Win32_Service') 'listener ownership is not tied to TermService'
     Assert-True ($source -match 'Restart-Service\s+-Name\s+TermService') 'TermService is not restarted after material registry changes'
     Assert-True ($source -match 'Get-NetFirewallAddressFilter') 'firewall remote address is not validated'
@@ -132,12 +135,13 @@ if ($loaded) {
         Assert-True (Test-RdpHostEdition 'ServerStandard') 'ServerStandard was rejected'
     }
 
-    Test-Case 'RDP port expression detects exact, list, and range rules' {
+    Test-Case 'RDP port expression detects exact, list, range, and any-port rules' {
         Assert-True (Test-RdpPortExpression '3389') 'exact RDP port was missed'
         Assert-True (Test-RdpPortExpression @('80', '3389')) 'RDP port in an array was missed'
         Assert-True (Test-RdpPortExpression '3388-3390') 'range containing RDP port was missed'
         Assert-True (-not (Test-RdpPortExpression '3390')) 'unrelated port was accepted'
-        Assert-True (-not (Test-RdpPortExpression 'Any')) 'Any-port rule should not be treated as specifically targeting RDP'
+        Assert-True (Test-RdpPortExpression 'Any') 'Any-port rule was missed'
+        Assert-True (Test-RdpPortExpression '*') 'wildcard port rule was missed'
     }
 
     Test-Case 'material RDP registry changes restart a running TermService' {

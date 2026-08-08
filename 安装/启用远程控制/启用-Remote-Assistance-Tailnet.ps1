@@ -142,6 +142,51 @@ function Enable-SolicitedRemoteAssistance {
     }
 }
 
+function Get-RemoteAssistancePolicySnapshot {
+    $propertyNames = @('fAllowToGetHelp', 'fAllowFullControl')
+    $paths = @(
+        'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services',
+        'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance'
+    )
+    foreach ($path in $paths) {
+        $pathExists = Test-Path -LiteralPath $path -PathType Container
+        $settings = if ($pathExists) { Get-ItemProperty -LiteralPath $path -ErrorAction Stop } else { $null }
+        $properties = @{}
+        foreach ($name in $propertyNames) {
+            $property = if ($settings) { $settings.PSObject.Properties[$name] } else { $null }
+            $properties[$name] = @{
+                Exists = $null -ne $property
+                Value  = if ($property) { $property.Value } else { $null }
+            }
+        }
+        [pscustomobject]@{ Path = $path; PathExists = $pathExists; Properties = $properties }
+    }
+}
+
+function Restore-RemoteAssistancePolicy {
+    param([object[]]$Snapshot)
+    foreach ($entry in @($Snapshot)) {
+        if (-not $entry.PathExists) {
+            if (Test-Path -LiteralPath $entry.Path -PathType Container) {
+                Remove-Item -LiteralPath $entry.Path -Recurse -Force -ErrorAction Stop
+            }
+            continue
+        }
+        New-Item -Path $entry.Path -Force -ErrorAction Stop | Out-Null
+        foreach ($name in @('fAllowToGetHelp', 'fAllowFullControl')) {
+            $property = $entry.Properties[$name]
+            if ($property.Exists) {
+                Set-ItemProperty -LiteralPath $entry.Path -Name $name -Type DWord -Value $property.Value -ErrorAction Stop
+            } else {
+                $current = Get-ItemProperty -LiteralPath $entry.Path -ErrorAction Stop
+                if ($null -ne $current.PSObject.Properties[$name]) {
+                    Remove-ItemProperty -LiteralPath $entry.Path -Name $name -ErrorAction Stop
+                }
+            }
+        }
+    }
+}
+
 function Assert-RemoteAssistancePolicy {
     $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
     $systemPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance'
@@ -157,6 +202,7 @@ function Test-RemoteAssistancePortExpression {
     foreach ($entry in @($LocalPort)) {
         foreach ($token in ("$entry" -split ',')) {
             $value = $token.Trim()
+            if ($value -in @('Any', '*')) { return $true }
             if ($value -eq "$($script:RemoteAssistancePort)") { return $true }
             if ($value -match '^(\d+)-(\d+)$') {
                 $lower = [int]$Matches[1]
@@ -170,7 +216,8 @@ function Test-RemoteAssistancePortExpression {
 
 function Get-CompetingRemoteAssistanceFirewallRules {
     $filters = Get-NetFirewallPortFilter -PolicyStore ActiveStore -ErrorAction Stop | Where-Object {
-        "$($_.Protocol)" -in @('TCP', '6') -and (Test-RemoteAssistancePortExpression $_.LocalPort)
+        "$($_.Protocol)" -in @('TCP', '6', 'Any', '256') -and
+            (Test-RemoteAssistancePortExpression $_.LocalPort)
     }
     $competing = New-Object System.Collections.Generic.List[object]
     foreach ($filter in $filters) {
@@ -181,7 +228,7 @@ function Get-CompetingRemoteAssistanceFirewallRules {
             }
         }
     }
-    return @($competing)
+    return $competing.ToArray()
 }
 
 function Assert-NoCompetingRemoteAssistanceFirewallRules {
@@ -193,17 +240,60 @@ function Assert-NoCompetingRemoteAssistanceFirewallRules {
 }
 
 function Set-RemoteAssistanceTailnetFirewall {
-    foreach ($rule in @(Get-CompetingRemoteAssistanceFirewallRules)) {
-        $rule | Disable-NetFirewallRule -ErrorAction Stop | Out-Null
+    $rollbackState = [pscustomobject]@{
+        CreatedRuleNames = New-Object System.Collections.Generic.List[string]
+        DisabledRules    = New-Object System.Collections.Generic.List[object]
     }
-    Get-NetFirewallRule -Name $script:RemoteAssistanceRuleName -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule -ErrorAction Stop
-    New-NetFirewallRule -Name $script:RemoteAssistanceRuleName `
-        -DisplayName 'Remote Assistance over Tailscale (TCP)' -Direction Inbound `
-        -Protocol TCP -LocalPort $script:RemoteAssistancePort -RemoteAddress $script:TailnetCidr `
-        -Action Allow -Profile Any | Out-Null
-    Assert-RemoteAssistanceFirewallRule
-    Assert-NoCompetingRemoteAssistanceFirewallRules
+    try {
+        $existing = @(Get-NetFirewallRule -Name $script:RemoteAssistanceRuleName -ErrorAction SilentlyContinue)
+        if ($existing.Count -gt 1) { throw "防火墙规则 $($script:RemoteAssistanceRuleName) 存在多个实例。" }
+        if ($existing.Count -eq 0) {
+            New-NetFirewallRule -Name $script:RemoteAssistanceRuleName `
+                -DisplayName 'Remote Assistance over Tailscale (TCP)' -Direction Inbound `
+                -Protocol TCP -LocalPort $script:RemoteAssistancePort -RemoteAddress $script:TailnetCidr `
+                -Action Allow -Profile Any -ErrorAction Stop | Out-Null
+            $rollbackState.CreatedRuleNames.Add($script:RemoteAssistanceRuleName)
+        }
+        Assert-RemoteAssistanceFirewallRule
+
+        $competing = @(Get-CompetingRemoteAssistanceFirewallRules | Sort-Object -Property Name -Unique)
+        foreach ($rule in $competing) {
+            $rule | Disable-NetFirewallRule -ErrorAction Stop | Out-Null
+            $rollbackState.DisabledRules.Add($rule)
+        }
+        Assert-NoCompetingRemoteAssistanceFirewallRules
+        return $rollbackState
+    } catch {
+        $originalError = $_.Exception
+        if (-not (Undo-RemoteAssistanceTailnetFirewall -State $rollbackState)) {
+            throw "防火墙配置失败：$($originalError.Message)；回滚未完全成功。"
+        }
+        throw $originalError
+    }
+}
+
+function Undo-RemoteAssistanceTailnetFirewall {
+    param([object]$State)
+    if (-not $State) { return $true }
+    $clean = $true
+    foreach ($rule in @($State.DisabledRules)) {
+        try {
+            $rule | Enable-NetFirewallRule -ErrorAction Stop | Out-Null
+        } catch {
+            $clean = $false
+            Write-Warn "无法重新启用防火墙规则 $($rule.Name)：$($_.Exception.Message)"
+        }
+    }
+    foreach ($name in @($State.CreatedRuleNames)) {
+        try {
+            Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -ErrorAction Stop
+        } catch {
+            $clean = $false
+            Write-Warn "无法删除本次新建的防火墙规则 $name：$($_.Exception.Message)"
+        }
+    }
+    return $clean
 }
 
 function Assert-RemoteAssistanceFirewallRule {
@@ -433,6 +523,9 @@ function Remove-InvitationArtifacts {
 function Invoke-RemoteAssistanceSetup {
     $telegram = @{ Token = $TgBotToken; ChatId = $TgChatId }
     $invitation = $null
+    $policySnapshot = $null
+    $policyChanged = $false
+    $firewallRollback = $null
     try {
         Assert-TelegramConfig
         Write-Log '检查 Tailscale 就绪状态…'
@@ -441,10 +534,12 @@ function Invoke-RemoteAssistanceSetup {
         $msraExe = Get-MsraExe
 
         Write-Log '启用受邀式 Remote Assistance 和完整控制请求…'
+        $policySnapshot = @(Get-RemoteAssistancePolicySnapshot)
+        $policyChanged = $true
         Enable-SolicitedRemoteAssistance
         Assert-RemoteAssistancePolicy
         Write-Log '将 Remote Assistance 防火墙限制为 Tailnet IPv4…'
-        Set-RemoteAssistanceTailnetFirewall
+        $firewallRollback = Set-RemoteAssistanceTailnetFirewall
 
         Write-Log '生成临时 Remote Assistance 邀请…'
         $invitation = Start-RemoteAssistanceInvitation -MsraExe $msraExe -TailscaleIp $tailscaleIp
@@ -473,6 +568,16 @@ function Invoke-RemoteAssistanceSetup {
         $reason = $_.Exception.Message
         Write-Err $reason
         if ($invitation) { [void](Remove-InvitationArtifacts -Invitation $invitation -StopProcess) }
+        if ($firewallRollback -and -not (Undo-RemoteAssistanceTailnetFirewall -State $firewallRollback)) {
+            Write-Warn 'Remote Assistance 防火墙未能完全回滚。'
+        }
+        if ($policyChanged) {
+            try {
+                Restore-RemoteAssistancePolicy -Snapshot $policySnapshot
+            } catch {
+                Write-Warn "Remote Assistance 策略未能完全回滚：$($_.Exception.Message)"
+            }
+        }
         $failure = New-RemoteAssistanceFailureMessage -Reason $reason
         if ($TgBotToken -and $TgChatId -and -not (Send-TelegramMessage -Config $telegram -Text $failure)) {
             Write-Warn 'Telegram 失败通知未能送达。'

@@ -192,6 +192,7 @@ function Test-RdpPortExpression {
     foreach ($entry in @($LocalPort)) {
         foreach ($token in ("$entry" -split ',')) {
             $value = $token.Trim()
+            if ($value -in @('Any', '*')) { return $true }
             if ($value -eq "$($script:RdpPort)") { return $true }
             if ($value -match '^(\d+)-(\d+)$') {
                 $lower = [int]$Matches[1]
@@ -229,23 +230,54 @@ function Assert-NoCompetingRdpFirewallRules {
 }
 
 function Set-RdpTailnetFirewall {
-    $ownedRules = @($script:RdpTcpRuleName, $script:RdpUdpRuleName)
-    $competing = @(Get-CompetingRdpFirewallRules)
-    foreach ($rule in $competing) {
-        $rule | Disable-NetFirewallRule -ErrorAction Stop | Out-Null
-    }
+    $createdRuleNames = New-Object System.Collections.Generic.List[string]
+    $disabledRules = New-Object System.Collections.Generic.List[object]
+    try {
+        $ruleDefinitions = @(
+            @{ Name = $script:RdpTcpRuleName; DisplayName = 'RDP over Tailscale (TCP)'; Protocol = 'TCP' },
+            @{ Name = $script:RdpUdpRuleName; DisplayName = 'RDP over Tailscale (UDP)'; Protocol = 'UDP' }
+        )
+        foreach ($definition in $ruleDefinitions) {
+            $existing = @(Get-NetFirewallRule -Name $definition.Name -ErrorAction SilentlyContinue)
+            if ($existing.Count -gt 1) { throw "防火墙规则 $($definition.Name) 存在多个实例。" }
+            if ($existing.Count -eq 0) {
+                New-NetFirewallRule -Name $definition.Name -DisplayName $definition.DisplayName `
+                    -Direction Inbound -Protocol $definition.Protocol -LocalPort $script:RdpPort `
+                    -RemoteAddress $script:TailnetCidr -Action Allow -Profile Any -ErrorAction Stop | Out-Null
+                $createdRuleNames.Add($definition.Name)
+            }
+            Assert-RdpFirewallRule -Name $definition.Name -Protocol $definition.Protocol
+        }
 
-    foreach ($name in $ownedRules) {
-        Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+        $competing = @(Get-CompetingRdpFirewallRules | Sort-Object -Property Name -Unique)
+        foreach ($rule in $competing) {
+            $rule | Disable-NetFirewallRule -ErrorAction Stop | Out-Null
+            $disabledRules.Add($rule)
+        }
+        Assert-NoCompetingRdpFirewallRules
+    } catch {
+        $originalError = $_.Exception
+        $rollbackErrors = New-Object System.Collections.Generic.List[string]
+        foreach ($rule in $disabledRules) {
+            try {
+                $rule | Enable-NetFirewallRule -ErrorAction Stop | Out-Null
+            } catch {
+                $rollbackErrors.Add("重新启用 $($rule.Name) 失败：$($_.Exception.Message)")
+            }
+        }
+        foreach ($name in $createdRuleNames) {
+            try {
+                Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue |
+                    Remove-NetFirewallRule -ErrorAction Stop
+            } catch {
+                $rollbackErrors.Add("删除新建规则 $name 失败：$($_.Exception.Message)")
+            }
+        }
+        if ($rollbackErrors.Count) {
+            throw "防火墙配置失败：$($originalError.Message)；回滚失败：$($rollbackErrors -join '；')"
+        }
+        throw $originalError
     }
-
-    New-NetFirewallRule -Name $script:RdpTcpRuleName -DisplayName 'RDP over Tailscale (TCP)' `
-        -Direction Inbound -Protocol TCP -LocalPort $script:RdpPort -RemoteAddress $script:TailnetCidr `
-        -Action Allow -Profile Any | Out-Null
-    New-NetFirewallRule -Name $script:RdpUdpRuleName -DisplayName 'RDP over Tailscale (UDP)' `
-        -Direction Inbound -Protocol UDP -LocalPort $script:RdpPort -RemoteAddress $script:TailnetCidr `
-        -Action Allow -Profile Any | Out-Null
-    Assert-NoCompetingRdpFirewallRules
 }
 
 function Assert-RdpFirewallRule {
@@ -275,6 +307,7 @@ function Assert-RdpReady {
     if ($terminalServer.fDenyTSConnections -ne 0) { throw 'RDP 未启用。' }
     if ($rdpTcp.UserAuthentication -ne 1) { throw 'NLA 未启用。' }
     if ($rdpTcp.SecurityLayer -ne 2) { throw 'RDP TLS 安全层未启用。' }
+    if ($rdpTcp.MinEncryptionLevel -ne 3) { throw 'RDP 最低加密级别未设为 High。' }
     if ($rdpTcp.PortNumber -ne $script:RdpPort) { throw 'RDP 监听端口不是 3389。' }
 
     $service = Get-Service -Name TermService -ErrorAction Stop

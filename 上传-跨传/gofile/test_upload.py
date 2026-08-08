@@ -38,9 +38,9 @@ class GoFileUploaderTests(unittest.TestCase):
         self.assertTrue(upload.uses_default_backup_and_auto_confirm(["--auto-backup"]))
         self.assertFalse(upload.uses_default_backup_and_auto_confirm([]))
 
-    def test_default_backup_path_is_in_the_current_user_home_directory(self):
+    def test_default_backup_path_is_relative_to_the_script(self):
         self.assertEqual(
-            upload.default_backup_path(), Path.home() / "Zombie-Tools" / "BACKUP"
+            upload.default_backup_path(), MODULE_PATH.resolve().parents[2] / "BACKUP"
         )
 
     def test_normalizes_quoted_windows_path(self):
@@ -60,9 +60,7 @@ class GoFileUploaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             file_path = Path(temporary_directory) / "example.txt"
             file_path.write_text("content", encoding="utf-8")
-            with patch.object(uploader, "_check_internet_connection", return_value=True), patch.object(
-                uploader.session, "post", return_value=response
-            ) as post:
+            with patch.object(uploader.session, "post", return_value=response) as post:
                 result = uploader.upload_file(file_path)
 
         self.assertTrue(result["success"])

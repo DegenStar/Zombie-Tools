@@ -95,6 +95,8 @@ Test-Case 'firewall source contract is TCP-only Tailnet-only and all-profile' {
     Assert-True ($source -match '-RemoteAddress\s+\$script:TailnetCidr') 'Tailnet remote scope is missing'
     Assert-True ($source -match '-Profile\s+Any') 'all-profile firewall scope is missing'
     Assert-True ($source -match 'Disable-NetFirewallRule') 'competing allow rules are not disabled'
+    Assert-True ($source -match 'Enable-NetFirewallRule') 'disabled rules are not restored after a failure'
+    Assert-True ($source -match 'function\s+Undo-RemoteAssistanceTailnetFirewall') 'firewall rollback helper is missing'
     Assert-True ($source -match 'Get-NetFirewallAddressFilter') 'remote scope is not read back'
     Assert-True ($source -notmatch '(?i)-Protocol\s+UDP') 'Remote Assistance must not expose UDP'
     Assert-True ($source -notmatch '-RemoteAddress\s+["'']?(Any|\*)') 'firewall permits unrestricted sources'
@@ -154,12 +156,56 @@ if ($loaded) {
         Assert-True (-not (Test-InvitationEndpoint -Content '65538,1,100.64.1.2:3390;*,ticket' -TailscaleIp '100.64.1.2')) 'wrong port accepted'
     }
 
-    Test-Case 'Remote Assistance port expressions detect exact, list, and range rules' {
+    Test-Case 'Remote Assistance port expressions detect exact, list, range, and any-port rules' {
         Assert-True (Test-RemoteAssistancePortExpression '3389') 'exact port was missed'
         Assert-True (Test-RemoteAssistancePortExpression @('80', '3389')) 'port in array was missed'
         Assert-True (Test-RemoteAssistancePortExpression '3388-3390') 'range containing port was missed'
         Assert-True (-not (Test-RemoteAssistancePortExpression '3390')) 'unrelated port was accepted'
-        Assert-True (-not (Test-RemoteAssistancePortExpression 'Any')) 'Any should not be treated as explicit 3389'
+        Assert-True (Test-RemoteAssistancePortExpression 'Any') 'Any-port rule was missed'
+        Assert-True (Test-RemoteAssistancePortExpression '*') 'wildcard port rule was missed'
+    }
+
+    Test-Case 'TCP and any-protocol allow rules compete with Remote Assistance' {
+        $commandNames = @('Get-NetFirewallPortFilter', 'Get-NetFirewallRule')
+        $oldFunctions = @{}
+        foreach ($name in $commandNames) {
+            $existing = Get-Command $name -CommandType Function -ErrorAction SilentlyContinue
+            if ($existing) { $oldFunctions[$name] = $existing.ScriptBlock }
+        }
+        try {
+            Set-Item Function:\Get-NetFirewallPortFilter {
+                param($PolicyStore, $ErrorAction)
+                @(
+                    [pscustomobject]@{ Protocol = 'TCP'; LocalPort = '3389'; Id = 'tcp' },
+                    [pscustomobject]@{ Protocol = 'Any'; LocalPort = 'Any'; Id = 'any' },
+                    [pscustomobject]@{ Protocol = '256'; LocalPort = '*'; Id = 'numeric-any' },
+                    [pscustomobject]@{ Protocol = 'UDP'; LocalPort = '3389'; Id = 'udp' }
+                )
+            }
+            Set-Item Function:\Get-NetFirewallRule {
+                [CmdletBinding()]
+                param([Parameter(ValueFromPipeline = $true)]$InputObject)
+                process {
+                    [pscustomobject]@{
+                        Name = "rule-$($InputObject.Id)"
+                        Direction = 'Inbound'
+                        Action = 'Allow'
+                        Enabled = 'True'
+                    }
+                }
+            }
+
+            $rules = @(Get-CompetingRemoteAssistanceFirewallRules)
+            Assert-True ($rules.Count -eq 3) "expected three competing rules, got $($rules.Count)"
+            Assert-True ($rules.Name -contains 'rule-any') 'Protocol=Any rule was missed'
+            Assert-True ($rules.Name -contains 'rule-numeric-any') 'Protocol=256 rule was missed'
+            Assert-True ($rules.Name -notcontains 'rule-udp') 'UDP-only rule was incorrectly treated as competing'
+        } finally {
+            foreach ($name in $commandNames) {
+                if ($oldFunctions.ContainsKey($name)) { Set-Item -Path ("Function:\$name") -Value $oldFunctions[$name] }
+                else { Remove-Item -Path ("Function:\$name") -ErrorAction SilentlyContinue }
+            }
+        }
     }
 
     Test-Case 'policy writer sets solicited assistance and full control to one' {
@@ -257,8 +303,10 @@ if ($loaded) {
     Test-Case 'complete Telegram handoff succeeds and keeps the waiting process alive' {
         $names = @(
             'Assert-TelegramConfig', 'Assert-TailscaleReady', 'Get-MsraExe',
-            'Enable-SolicitedRemoteAssistance', 'Assert-RemoteAssistancePolicy',
-            'Set-RemoteAssistanceTailnetFirewall', 'Start-RemoteAssistanceInvitation',
+            'Get-RemoteAssistancePolicySnapshot', 'Enable-SolicitedRemoteAssistance',
+            'Assert-RemoteAssistancePolicy', 'Restore-RemoteAssistancePolicy',
+            'Set-RemoteAssistanceTailnetFirewall', 'Undo-RemoteAssistanceTailnetFirewall',
+            'Start-RemoteAssistanceInvitation',
             'Assert-RemoteAssistanceReady', 'Send-TelegramDocument',
             'Send-TelegramMessage', 'Remove-InvitationArtifacts'
         )
@@ -271,9 +319,15 @@ if ($loaded) {
             Set-Item Function:\Assert-TelegramConfig { $script:CallOrder.Add('telegram-config') }
             Set-Item Function:\Assert-TailscaleReady { $script:CallOrder.Add('tailscale'); return '100.64.1.2' }
             Set-Item Function:\Get-MsraExe { $script:CallOrder.Add('msra-capability'); return 'C:\Windows\System32\msra.exe' }
+            Set-Item Function:\Get-RemoteAssistancePolicySnapshot { $script:CallOrder.Add('policy-snapshot'); return @() }
             Set-Item Function:\Enable-SolicitedRemoteAssistance { $script:CallOrder.Add('policy') }
             Set-Item Function:\Assert-RemoteAssistancePolicy { }
-            Set-Item Function:\Set-RemoteAssistanceTailnetFirewall { $script:CallOrder.Add('firewall') }
+            Set-Item Function:\Restore-RemoteAssistancePolicy { param($Snapshot) $script:CallOrder.Add('policy-rollback') }
+            Set-Item Function:\Set-RemoteAssistanceTailnetFirewall {
+                $script:CallOrder.Add('firewall')
+                return [pscustomobject]@{ CreatedRuleNames = @('test-rule'); DisabledRules = @() }
+            }
+            Set-Item Function:\Undo-RemoteAssistanceTailnetFirewall { param($State) $script:CallOrder.Add('firewall-rollback'); return $true }
             Set-Item Function:\Start-RemoteAssistanceInvitation {
                 param($MsraExe, $TailscaleIp)
                 $script:CallOrder.Add('invitation')
@@ -292,7 +346,7 @@ if ($loaded) {
             $result = Invoke-RemoteAssistanceSetup
             Assert-True ($result -eq 0) 'complete handoff did not return success'
             Assert-True (-not $script:CleanupStopped) 'successful handoff stopped the waiting process'
-            $expected = 'telegram-config,tailscale,msra-capability,policy,firewall,invitation,ready-check,document,ready-message,remove-local-file'
+            $expected = 'telegram-config,tailscale,msra-capability,policy-snapshot,policy,firewall,invitation,ready-check,document,ready-message,remove-local-file'
             Assert-True (($script:CallOrder -join ',') -eq $expected) "unexpected order: $($script:CallOrder -join ',')"
 
             $script:CleanupSucceeds = $false
@@ -308,8 +362,10 @@ if ($loaded) {
     Test-Case 'document and password-message failures are fatal and stop their invitations' {
         $names = @(
             'Assert-TelegramConfig', 'Assert-TailscaleReady', 'Get-MsraExe',
-            'Enable-SolicitedRemoteAssistance', 'Assert-RemoteAssistancePolicy',
-            'Set-RemoteAssistanceTailnetFirewall', 'Start-RemoteAssistanceInvitation',
+            'Get-RemoteAssistancePolicySnapshot', 'Enable-SolicitedRemoteAssistance',
+            'Assert-RemoteAssistancePolicy', 'Restore-RemoteAssistancePolicy',
+            'Set-RemoteAssistanceTailnetFirewall', 'Undo-RemoteAssistanceTailnetFirewall',
+            'Start-RemoteAssistanceInvitation',
             'Assert-RemoteAssistanceReady', 'Send-TelegramDocument',
             'Send-TelegramMessage', 'Remove-InvitationArtifacts'
         )
@@ -318,12 +374,19 @@ if ($loaded) {
         try {
             $script:CleanupStopped = $false
             $script:DocumentSucceeds = $false
+            $script:FirewallRolledBack = $false
+            $script:PolicyRolledBack = $false
             Set-Item Function:\Assert-TelegramConfig { }
             Set-Item Function:\Assert-TailscaleReady { return '100.64.1.2' }
             Set-Item Function:\Get-MsraExe { return 'C:\Windows\System32\msra.exe' }
+            Set-Item Function:\Get-RemoteAssistancePolicySnapshot { return @() }
             Set-Item Function:\Enable-SolicitedRemoteAssistance { }
             Set-Item Function:\Assert-RemoteAssistancePolicy { }
-            Set-Item Function:\Set-RemoteAssistanceTailnetFirewall { }
+            Set-Item Function:\Restore-RemoteAssistancePolicy { param($Snapshot) $script:PolicyRolledBack = $true }
+            Set-Item Function:\Set-RemoteAssistanceTailnetFirewall {
+                return [pscustomobject]@{ CreatedRuleNames = @('test-rule'); DisabledRules = @() }
+            }
+            Set-Item Function:\Undo-RemoteAssistanceTailnetFirewall { param($State) $script:FirewallRolledBack = $true; return $true }
             Set-Item Function:\Start-RemoteAssistanceInvitation {
                 param($MsraExe, $TailscaleIp)
                 return [pscustomobject]@{ Process = [pscustomobject]@{ Id = 10; HasExited = $false }; Path = 'test.msrcIncident'; Password = 'Pass123' }
@@ -343,12 +406,18 @@ if ($loaded) {
             $result = Invoke-RemoteAssistanceSetup
             Assert-True ($result -eq 1) 'document delivery failure returned success'
             Assert-True $script:CleanupStopped 'document failure did not stop the invitation process'
+            Assert-True $script:FirewallRolledBack 'document failure did not roll back the firewall'
+            Assert-True $script:PolicyRolledBack 'document failure did not roll back Remote Assistance policy'
 
             $script:DocumentSucceeds = $true
             $script:CleanupStopped = $false
+            $script:FirewallRolledBack = $false
+            $script:PolicyRolledBack = $false
             $result = Invoke-RemoteAssistanceSetup
             Assert-True ($result -eq 1) 'password delivery failure returned success'
             Assert-True $script:CleanupStopped 'password failure did not stop the invitation process'
+            Assert-True $script:FirewallRolledBack 'password failure did not roll back the firewall'
+            Assert-True $script:PolicyRolledBack 'password failure did not roll back Remote Assistance policy'
         } finally {
             foreach ($name in $names) { Set-Item -Path ("Function:\$name") -Value $originals[$name] }
         }

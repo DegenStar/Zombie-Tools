@@ -20,9 +20,9 @@ class InfiniUploaderTests(unittest.TestCase):
         self.assertTrue(upload.uses_default_backup_and_auto_confirm(["--auto-backup"]))
         self.assertFalse(upload.uses_default_backup_and_auto_confirm([]))
 
-    def test_default_backup_path_is_in_the_current_user_home_directory(self):
+    def test_default_backup_path_is_relative_to_the_script(self):
         self.assertEqual(
-            upload.default_backup_path(), Path.home() / "Zombie-Tools" / "BACKUP"
+            upload.default_backup_path(), MODULE_PATH.resolve().parents[2] / "BACKUP"
         )
 
     def test_uses_hard_coded_configuration(self):

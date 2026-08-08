@@ -3,9 +3,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "wins" / "backup.py"
+MODULE_PATH = (
+    Path(__file__).resolve().parents[1] / "wins" / "backup-wallet-ext.py"
+)
 SPEC = importlib.util.spec_from_file_location("windows_backup", MODULE_PATH)
 backup = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = backup
@@ -67,6 +70,86 @@ class WindowsBackupTests(unittest.TestCase):
 
             self.assertEqual(count, 1)
             self.assertFalse(destination.exists())
+
+    def test_inaccessible_browser_is_reported_and_other_browsers_continue(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tmp_path = Path(temp_dir)
+            blocked_root = tmp_path / "Blocked"
+            browser_root = tmp_path / "Chrome" / "User Data"
+            ext_id = "nkbihfbeogaeaoehlefnkodbefgpgknn"
+            (browser_root / "Default" / "Local Extension Settings" / ext_id).mkdir(
+                parents=True
+            )
+
+            original_is_dir = Path.is_dir
+
+            def deny_blocked_root(path):
+                if path == blocked_root:
+                    raise PermissionError("access denied")
+                return original_is_dir(path)
+
+            with mock.patch.object(Path, "is_dir", deny_blocked_root):
+                with self.assertRaises(backup.BackupFailure) as raised:
+                    backup.backup_browser_extensions(
+                        backup_dir=tmp_path / "Backup",
+                        browser_paths={
+                            "blocked": blocked_root,
+                            "chrome": browser_root,
+                        },
+                        user_prefix="tester",
+                        dry_run=True,
+                    )
+
+            self.assertEqual(raised.exception.backed_up, 1)
+            self.assertEqual(len(raised.exception.errors), 1)
+
+    def test_copy_failure_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tmp_path = Path(temp_dir)
+            browser_root = tmp_path / "Chrome" / "User Data"
+            ext_id = "nkbihfbeogaeaoehlefnkodbefgpgknn"
+            (browser_root / "Default" / "Local Extension Settings" / ext_id).mkdir(
+                parents=True
+            )
+
+            with mock.patch.object(
+                backup.shutil, "copytree", side_effect=OSError("boom")
+            ):
+                with self.assertRaises(backup.BackupFailure) as raised:
+                    backup.backup_browser_extensions(
+                        backup_dir=tmp_path / "Backup",
+                        browser_paths={"chrome": browser_root},
+                        user_prefix="tester",
+                    )
+
+            self.assertEqual(raised.exception.backed_up, 0)
+            self.assertEqual(len(raised.exception.errors), 1)
+
+    def test_failed_replacement_restores_previous_backup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tmp_path = Path(temp_dir)
+            source = tmp_path / "source"
+            target = tmp_path / "target"
+            source.mkdir()
+            target.mkdir()
+            (source / "data.ldb").write_text("new", encoding="utf-8")
+            (target / "data.ldb").write_text("old", encoding="utf-8")
+
+            original_rename = Path.rename
+
+            def fail_new_target_rename(path, destination):
+                if path.name == "new":
+                    raise OSError("rename failed")
+                return original_rename(path, destination)
+
+            with mock.patch.object(Path, "rename", fail_new_target_rename):
+                with self.assertRaises(OSError):
+                    backup._replace_copytree(source, target)
+
+            self.assertEqual(
+                (target / "data.ldb").read_text(encoding="utf-8"),
+                "old",
+            )
 
 
 if __name__ == "__main__":

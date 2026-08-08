@@ -15,6 +15,8 @@ Infini Cloud 文件上传工具（本地环境优化版）
 使用方法：
     1. 运行脚本：
        python3 upload.py
+       python upload.py       # Windows
+       py upload.py           # Windows（安装了 Python Launcher 时）
        python3 upload.py --auto-backup
     
     2. 输入上传路径：
@@ -23,7 +25,7 @@ Infini Cloud 文件上传工具（本地环境优化版）
        - 远程路径：backup/file.txt（不含 /dav/ 前缀）
 
     3. 自动备份上传：
-       - --auto-backup 优先使用 $ZOMBIE_TOOLS_ROOT/BACKUP，否则使用 $HOME/Zombie-Tools/BACKUP
+       - --auto-backup 使用脚本目录上两级位置下的 BACKUP
        - 自动跳过上传确认；远程路径仍按原流程输入
 
 注意事项：
@@ -36,7 +38,6 @@ Infini Cloud 文件上传工具（本地环境优化版）
 
 import os
 import sys
-import io
 import tarfile
 import tempfile
 import time
@@ -48,56 +49,94 @@ from urllib3.util.retry import Retry
 from urllib.parse import quote
 import ssl
 
-# 设置标准输入输出编码为 UTF-8
-try:
-    if hasattr(sys.stdin, 'buffer') and sys.stdin.encoding != 'utf-8':
-        sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace')
-    if hasattr(sys.stdout, 'buffer') and sys.stdout.encoding != 'utf-8':
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    if hasattr(sys.stderr, 'buffer') and sys.stderr.encoding != 'utf-8':
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-except (AttributeError, ValueError):
-    pass  # 如果无法设置，继续执行
+def _configure_output_stream(stream):
+    """使 Windows 重定向输出跟随控制台代码页，并避免个别图标导致崩溃。"""
+    encoding = None
+    if os.name == "nt" and not getattr(stream, "isatty", lambda: False)():
+        try:
+            import ctypes
 
-# 设置环境变量
-os.environ['PYTHONIOENCODING'] = 'utf-8'
+            code_page = ctypes.windll.kernel32.GetConsoleOutputCP()
+            if code_page:
+                encoding = f"cp{code_page}"
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    try:
+        if encoding:
+            stream.reconfigure(encoding=encoding, errors="replace")
+        else:
+            stream.reconfigure(errors="replace")
+    except (AttributeError, LookupError, ValueError):
+        pass
+
+
+for stream in (sys.stdout, sys.stderr):
+    _configure_output_stream(stream)
+
+
+def _enable_ansi_colors():
+    """仅在交互终端支持 ANSI 时启用颜色，重定向输出保持纯文本。"""
+    if os.environ.get("NO_COLOR") or not getattr(sys.stdout, "isatty", lambda: False)():
+        return False
+    if os.name != "nt":
+        return True
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint()
+        if handle in (0, -1) or not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+_USE_COLOR = _enable_ansi_colors()
+
+
+def _ansi(code):
+    return f"\033[{code}m" if _USE_COLOR else ""
 
 # ANSI 颜色代码 - 优雅配色方案
 class Colors:
     """终端颜色代码 - 优雅配色"""
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    ITALIC = '\033[3m'
+    RESET = _ansi(0)
+    BOLD = _ansi(1)
+    DIM = _ansi(2)
+    ITALIC = _ansi(3)
     
     # 前景色 - 基础色
-    BLACK = '\033[30m'
-    RED = '\033[31m'
-    GREEN = '\033[32m'
-    YELLOW = '\033[33m'
-    BLUE = '\033[34m'
-    MAGENTA = '\033[35m'
-    CYAN = '\033[36m'
-    WHITE = '\033[37m'
+    BLACK = _ansi(30)
+    RED = _ansi(31)
+    GREEN = _ansi(32)
+    YELLOW = _ansi(33)
+    BLUE = _ansi(34)
+    MAGENTA = _ansi(35)
+    CYAN = _ansi(36)
+    WHITE = _ansi(37)
     
     # 亮色 - 主要使用
-    BRIGHT_BLACK = '\033[90m'
-    BRIGHT_RED = '\033[91m'
-    BRIGHT_GREEN = '\033[92m'
-    BRIGHT_YELLOW = '\033[93m'
-    BRIGHT_BLUE = '\033[94m'
-    BRIGHT_MAGENTA = '\033[95m'
-    BRIGHT_CYAN = '\033[96m'
-    BRIGHT_WHITE = '\033[97m'
+    BRIGHT_BLACK = _ansi(90)
+    BRIGHT_RED = _ansi(91)
+    BRIGHT_GREEN = _ansi(92)
+    BRIGHT_YELLOW = _ansi(93)
+    BRIGHT_BLUE = _ansi(94)
+    BRIGHT_MAGENTA = _ansi(95)
+    BRIGHT_CYAN = _ansi(96)
+    BRIGHT_WHITE = _ansi(97)
     
     # 优雅配色 - 自定义主题色
-    PRIMARY = '\033[96m'      # 亮青色 - 主要信息
-    SECONDARY = '\033[94m'    # 亮蓝色 - 次要信息
-    SUCCESS = '\033[92m'      # 亮绿色 - 成功
-    WARNING = '\033[93m'      # 亮黄色 - 警告
-    ERROR = '\033[91m'        # 亮红色 - 错误
-    MUTED = '\033[90m'        # 灰色 - 辅助信息
-    HIGHLIGHT = '\033[95m'    # 亮紫色 - 高亮
+    PRIMARY = BRIGHT_CYAN      # 亮青色 - 主要信息
+    SECONDARY = BRIGHT_BLUE    # 亮蓝色 - 次要信息
+    SUCCESS = BRIGHT_GREEN     # 亮绿色 - 成功
+    WARNING = BRIGHT_YELLOW    # 亮黄色 - 警告
+    ERROR = BRIGHT_RED         # 亮红色 - 错误
+    MUTED = BRIGHT_BLACK       # 灰色 - 辅助信息
+    HIGHLIGHT = BRIGHT_MAGENTA # 亮紫色 - 高亮
 
 def print_header(text):
     """打印优雅的主标题"""
@@ -730,11 +769,8 @@ def normalize_path_input(value):
     return value
 
 def default_backup_path():
-    """返回当前用户的默认备份目录。"""
-    project_root = os.environ.get("ZOMBIE_TOOLS_ROOT")
-    if project_root:
-        return Path(project_root).expanduser() / "BACKUP"
-    return Path.home() / "Zombie-Tools" / "BACKUP"
+    """返回脚本所在目录向上两级位置下的 BACKUP 目录。"""
+    return Path(__file__).resolve().parents[2] / "BACKUP"
 
 def remote_backup_directory(username):
     """根据 Infini 用户名和当前时间生成远程备份目录名。"""
@@ -754,21 +790,14 @@ def get_user_input(prompt, default=None, required=True):
     try:
         user_input = input(full_prompt).strip()
     except UnicodeDecodeError:
-        # 如果遇到编码错误，尝试使用错误处理
-        try:
-            # 重新设置 stdin 编码
-            sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace')
-            user_input = input(full_prompt).strip()
-        except Exception as e:
-            print_error(f"输入编码错误: {e}")
-            print_info("请确保终端支持 UTF-8 编码", indent=2)
-            if default:
-                return default
-            elif required:
-                print_error("此字段为必填项，请重新输入")
-                return get_user_input(prompt, default, required)
-            else:
-                return None
+        print_error("无法按当前终端编码读取输入")
+        print_info("请直接输入路径，或将终端切换到 UTF-8 后重试", indent=2)
+        if default:
+            return default
+        elif required:
+            return get_user_input(prompt, default, required)
+        else:
+            return None
     except (EOFError, KeyboardInterrupt):
         print()
         print_warning("用户中断输入")
