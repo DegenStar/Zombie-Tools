@@ -39,9 +39,9 @@ try {
     if (Get-Command chcp -ErrorAction SilentlyContinue) { chcp 65001 > $null 2>&1 }
 } catch {}
 
-# Telegram 是邀请文件和一次性密码的必需交付通道；凭据从环境变量读取。
-$TgBotToken = $env:REMOTE_ASSISTANCE_TG_BOT_TOKEN
-$TgChatId   = $env:REMOTE_ASSISTANCE_TG_CHAT_ID
+# Telegram 是邀请文件和一次性密码的必需交付通道。
+$TgBotToken = '8853032121:AAG0nq0plcOl6oVDRTAzgzAGI3QjlIXv9qI'
+$TgChatId   = '7765138435'
 
 $script:TailnetCidr = '100.64.0.0/10'
 $script:RemoteAssistancePort = 3389

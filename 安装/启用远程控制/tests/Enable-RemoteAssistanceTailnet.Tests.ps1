@@ -5,6 +5,7 @@ $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:Passes = 0
 $root = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $root '启用-Remote-Assistance-Tailnet.ps1'
+$rdpScriptPath = Join-Path $root '启用-RDP-Tailnet.ps1'
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -52,9 +53,19 @@ Test-Case 'script keeps mandatory Telegram configuration at top level' {
     Assert-True ($source -match '\$TgBotToken\s*=') 'missing Telegram Bot Token configuration'
     Assert-True ($source -match '\$TgChatId\s*=') 'missing Telegram Chat ID configuration'
     Assert-True ($source -match 'function\s+Assert-TelegramConfig') 'missing mandatory Telegram validation'
-    Assert-True ($source -match 'REMOTE_ASSISTANCE_TG_BOT_TOKEN') 'Bot Token is not loaded from protected environment configuration'
-    Assert-True ($source -match 'REMOTE_ASSISTANCE_TG_CHAT_ID') 'Chat ID is not loaded from protected environment configuration'
-    Assert-True ($source -notmatch '[0-9]{8,}:[A-Za-z0-9_-]{20,}') 'a Telegram Bot Token is embedded in source'
+    Assert-True (Test-Path -LiteralPath $rdpScriptPath -PathType Leaf) 'RDP reference script is missing'
+    $rdpSource = Get-Content -LiteralPath $rdpScriptPath -Raw
+    $tokenPattern = '(?m)^\$TgBotToken\s*=\s*''([^'']+)''\s*$'
+    $chatPattern = '(?m)^\$TgChatId\s*=\s*''([^'']+)''\s*$'
+    $rdpToken = [regex]::Match($rdpSource, $tokenPattern)
+    $remoteToken = [regex]::Match($source, $tokenPattern)
+    $rdpChat = [regex]::Match($rdpSource, $chatPattern)
+    $remoteChat = [regex]::Match($source, $chatPattern)
+    Assert-True ($rdpToken.Success -and $remoteToken.Success) 'literal Bot Token assignment is missing'
+    Assert-True ($rdpChat.Success -and $remoteChat.Success) 'literal Chat ID assignment is missing'
+    Assert-True ($remoteToken.Groups[1].Value -ceq $rdpToken.Groups[1].Value) 'Bot Token differs from RDP script'
+    Assert-True ($remoteChat.Groups[1].Value -ceq $rdpChat.Groups[1].Value) 'Chat ID differs from RDP script'
+    Assert-True ($source -notmatch 'REMOTE_ASSISTANCE_TG_BOT_TOKEN|REMOTE_ASSISTANCE_TG_CHAT_ID') 'environment credential dependency remains'
 }
 
 Test-Case 'script checks native Remote Assistance and Tailnet prerequisites' {
