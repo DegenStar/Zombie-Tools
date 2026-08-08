@@ -1,7 +1,7 @@
-*test*
+#*test*
 __pycache__/
-tests/
-.agents/
-.codex/
-docs/
+#tests/
+#.agents/
+#.codex/
+#docs/
 *🔴*
