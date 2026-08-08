@@ -10,6 +10,7 @@ Remote Assistance is interactive rather than unattended: the target user must ac
 
 - Add `启用-Remote-Assistance-Tailnet.ps1` next to the existing RDP script.
 - Preserve the existing Windows script conventions: UAC self-elevation, `-LibraryOnly` for safe test loading, `-NoPause` for automation, UTF-8 console output, top-level Telegram configuration, and process exit codes `0` and `1`.
+- Hard-code `$TgBotToken` and `$TgChatId` as string literals using the same values currently present in `启用-RDP-Tailnet.ps1`. Do not read or override them from environment variables or a separate configuration file.
 - Require native `msra.exe` and a Tailscale service whose backend is `Running` with a valid IPv4 address in `100.64.0.0/10`.
 - Require non-empty Telegram Bot Token and Chat ID values. Telegram is the invitation handoff channel, so missing credentials are fatal rather than a reason to skip notification.
 - Do not install Tailscale, alter SSH, modify account passwords, or attempt to emulate Remote Assistance on Windows installations that do not provide `msra.exe`.
@@ -36,6 +37,7 @@ The script accepts the lifetime encoded by native Windows invitation generation 
 - On failure after invitation startup, terminate only the `msra.exe` process started by this run, remove the local invitation, and send `[REMOTE ASSISTANCE FAILED]` when Telegram messaging is available.
 - Never return success before all local readiness assertions, invitation upload, and READY/password message delivery have succeeded.
 - Telegram delivery places both the invitation and password in the confirmed chat. Tailnet-only firewall scope remains the network access boundary; Telegram chat access is therefore also security-sensitive.
+- The approved hard-coded credentials are plaintext secrets and will enter the source file and Git history. Documentation must warn that repository/script read access exposes the Bot Token and Chat ID, and that a leaked token must be rotated in BotFather.
 - Re-running the script generates a new invitation and password and converges policy and the owned firewall rule to the same state. It does not reuse prior invitation credentials.
 - The script does not promise unattended access. The target user must approve connection and control prompts for every assistance session.
 
@@ -53,7 +55,7 @@ Add a PowerShell test script covering:
 - safe `-LibraryOnly` loading, `-NoPause`, and UAC elevation support;
 - Tailscale IPv4 boundary validation and backend checks;
 - `msra.exe` capability checks and solicited-assistance policy configuration;
-- mandatory Telegram credentials and full-control policy without unsolicited assistance;
+- literal, non-empty Telegram credentials with no environment-variable dependency, plus full-control policy without unsolicited assistance;
 - cryptographically generated per-run passwords restricted to a command-safe alphabet;
 - a dedicated TCP-only firewall rule scoped to `100.64.0.0/10`, plus rejection of competing explicit TCP 3389 allow rules;
 - invitation validation, including the exact Tailnet address and non-empty file;
