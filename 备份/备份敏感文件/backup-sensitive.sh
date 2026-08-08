@@ -82,7 +82,7 @@ can_back_up_path() {
 
 umask 077
 mkdir -p -- "$BACKUP_DIR"
-chmod 700 -- "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 
 TEMP_ARCHIVE="$(mktemp "$BACKUP_DIR/.root-sensitive.XXXXXX")"
 trap cleanup EXIT HUP INT TERM
@@ -118,14 +118,14 @@ done
 
 TAR_ARGS=(--create --gzip --file "$TEMP_ARCHIVE" --numeric-owner --files-from "$TEMP_LIST" --directory /)
 if tar --version 2>/dev/null | grep -q 'GNU tar'; then
-    TAR_ARGS+=(--acls --xattrs --one-file-system --ignore-failed-read)
+    TAR_ARGS+=(--acls --xattrs --one-file-system)
 elif [ "$(uname -s)" = 'Darwin' ]; then
     TAR_ARGS+=(--acls --xattrs)
 fi
 
 log "Creating archive from $included path(s)"
 tar "${TAR_ARGS[@]}"
-chmod 600 -- "$TEMP_ARCHIVE"
+chmod 600 "$TEMP_ARCHIVE"
 
 timestamp="$(date '+%Y%m%d-%H%M%S')"
 FINAL_ARCHIVE="$BACKUP_DIR/root-sensitive-$timestamp.tar.gz"

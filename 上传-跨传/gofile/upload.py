@@ -23,7 +23,7 @@ GoFile 文件上传工具
        - 本地目录：/path/to/directory
 
     3. 自动备份上传：
-       - --auto-backup 使用 $HOME/Zombie-Tools/BACKUP（Windows 为当前用户目录下的对应路径）
+       - --auto-backup 优先使用 $ZOMBIE_TOOLS_ROOT/BACKUP，否则使用 $HOME/Zombie-Tools/BACKUP
        - 自动跳过上传确认；默认目录不存在时退出
 
 注意事项：
@@ -38,7 +38,6 @@ import sys
 import io
 import time
 import getpass
-import socket
 import tempfile
 import tarfile
 from pathlib import Path
@@ -136,16 +135,7 @@ def print_item(key, value, indent=2):
 
 class GoFileUploader:
     API_TOKEN = "mcxaco7jqmNj31TPHXsOo2xrhp9ESwS5"
-    # 网络配置
-    NETWORK_CHECK_HOSTS = [
-        "8.8.8.8",         # Google DNS
-        "1.1.1.1",         # Cloudflare DNS
-        "208.67.222.222",  # OpenDNS
-        "9.9.9.9"          # Quad9 DNS
-    ]
-    NETWORK_CHECK_TIMEOUT = 5  # 网络检查超时时间（秒）
-    NETWORK_CHECK_RETRIES = 3  # 网络检查重试次数
-    
+
     # 重试配置
     RETRY_COUNT = 5        # 最大重试次数
     RETRY_DELAY = 60       # 重试等待时间（秒）
@@ -194,29 +184,6 @@ class GoFileUploader:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
-
-    @staticmethod
-    def _check_internet_connection():
-        """
-        检查网络连接状态
-        
-        Returns:
-            bool: 网络连接是否可用
-        """
-        for _ in range(GoFileUploader.NETWORK_CHECK_RETRIES):
-            for host in GoFileUploader.NETWORK_CHECK_HOSTS:
-                try:
-                    socket.create_connection(
-                        (host, 53), 
-                        timeout=GoFileUploader.NETWORK_CHECK_TIMEOUT
-                    )
-                    return True
-                except (socket.timeout, socket.gaierror, ConnectionRefusedError):
-                    continue
-                except Exception:
-                    continue
-            time.sleep(1)  # 重试前等待1秒
-        return False
 
     def get_upload_server(self):
         """获取可用的上传服务器"""
@@ -291,17 +258,6 @@ class GoFileUploader:
         
         # 上传重试逻辑
         for attempt in range(self.RETRY_COUNT):
-            # 每次重试前检查网络连接
-            if not self._check_internet_connection():
-                print_error("网络连接不可用，等待重试...")
-                if attempt < self.RETRY_COUNT - 1:
-                    print_info(f"等待 {self.RETRY_DELAY} 秒后重试...", indent=2)
-                    time.sleep(self.RETRY_DELAY)
-                    continue
-                else:
-                    print_error("网络连接失败，上传终止")
-                    return None
-            
             # 服务器轮询
             for server in self.upload_servers:
                 try:
@@ -535,6 +491,9 @@ def normalize_path_input(value):
 
 def default_backup_path():
     """返回当前用户的默认备份目录。"""
+    project_root = os.environ.get("ZOMBIE_TOOLS_ROOT")
+    if project_root:
+        return Path(project_root).expanduser() / "BACKUP"
     return Path.home() / "Zombie-Tools" / "BACKUP"
 
 def remote_backup_directory(username=None):

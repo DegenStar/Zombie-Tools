@@ -23,7 +23,7 @@ Infini Cloud 文件上传工具（本地环境优化版）
        - 远程路径：backup/file.txt（不含 /dav/ 前缀）
 
     3. 自动备份上传：
-       - --auto-backup 使用 $HOME/Zombie-Tools/BACKUP（Windows 为当前用户目录下的对应路径）
+       - --auto-backup 优先使用 $ZOMBIE_TOOLS_ROOT/BACKUP，否则使用 $HOME/Zombie-Tools/BACKUP
        - 自动跳过上传确认；远程路径仍按原流程输入
 
 注意事项：
@@ -45,6 +45,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from requests.auth import HTTPBasicAuth
 from urllib3.util.retry import Retry
+from urllib.parse import quote
 import ssl
 
 # 设置标准输入输出编码为 UTF-8
@@ -141,45 +142,11 @@ def print_item(key, value, indent=2):
 
 class SSLAdapter(HTTPAdapter):
     """
-    自定义SSL适配器，解决SSL连接问题
-    使用更宽松的SSL配置以兼容不同的网络环境
+    自定义 SSL 适配器，保留连接池和重试配置。
+    使用系统信任库验证服务器证书和主机名。
     """
     def init_poolmanager(self, *args, **kwargs):
-        # 创建SSL上下文，使用更宽松的配置以解决SSL握手问题
-        try:
-            # 尝试使用默认上下文
-            ctx = ssl.create_default_context()
-        except:
-            # 如果失败，尝试使用未验证的上下文（Python 3.4+）
-            try:
-                ctx = ssl._create_unverified_context()
-            except AttributeError:
-                # Python 3.4以下版本，使用SSLContext
-                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS)
-        
-        # 禁用主机名验证和证书验证（解决本地网络环境的SSL问题）
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        
-        # 设置SSL选项以处理SSL握手问题
-        try:
-            # 禁用不安全的SSL/TLS版本
-            ctx.options |= ssl.OP_NO_SSLv2
-            ctx.options |= ssl.OP_NO_SSLv3
-            ctx.options |= ssl.OP_NO_TLSv1
-            ctx.options |= ssl.OP_NO_TLSv1_1
-        except AttributeError:
-            # 某些Python版本可能不支持这些选项
-            pass
-        
-        # 设置TLS版本（如果支持）
-        try:
-            ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
-            ctx.maximum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
-        except AttributeError:
-            # Python 3.6及以下版本不支持TLSVersion
-            pass
-        
+        ctx = ssl.create_default_context()
         kwargs['ssl_context'] = ctx
         return super().init_poolmanager(*args, **kwargs)
 
@@ -226,14 +193,8 @@ class InfiniUploader:
             print_success("账户配置检查通过")
             print()
 
-        # 禁用SSL警告（因为某些网络环境需要禁用SSL验证）
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
         # 配置自动重试机制和连接池（优化性能）
         self.session = requests.Session()
-        # 禁用SSL验证以解决本地网络环境的SSL问题
-        self.session.verify = False
         
         retries = Retry(
             total=3,                # 优化：减少重试次数，加快失败响应（网络稳定时）
@@ -265,6 +226,13 @@ class InfiniUploader:
         # 根据官方文档，Infini-cloud WebDAV 仅支持 BASIC 认证
         # 文档明确说明："does not support Digest-type BASIC authentication"
         self.auth = HTTPBasicAuth(self.user, self.password)
+
+    def remote_url(self, remote_path):
+        """将 WebDAV 相对路径按路径段编码，避免特殊字符被解析为 URL 语法。"""
+        encoded_path = "/".join(
+            quote(part, safe="") for part in remote_path.lstrip("/").split("/")
+        )
+        return f"{self.url.rstrip('/')}/{encoded_path}"
 
     def test_connection(self):
         """
@@ -326,7 +294,7 @@ class InfiniUploader:
         
         try:
             # 构建目录路径
-            dir_path = f"{self.url.rstrip('/')}/{remote_dir.lstrip('/')}"
+            dir_path = self.remote_url(remote_dir)
             
             # 优化：减少目录创建超时时间，加快响应（从15秒降到8秒）
             response = self.session.request('MKCOL', dir_path, auth=self.auth, timeout=(8, 8))
@@ -418,7 +386,7 @@ class InfiniUploader:
             print_error(f"路径不是文件: {local_path}")
             return False
         
-        remote_path = f"{self.url.rstrip('/')}/{remote_filename.lstrip('/')}"
+        remote_path = self.remote_url(remote_filename)
         file_size = local_path.stat().st_size
         
         # 检查远程路径是否包含目录，如果包含则尝试创建
@@ -763,6 +731,9 @@ def normalize_path_input(value):
 
 def default_backup_path():
     """返回当前用户的默认备份目录。"""
+    project_root = os.environ.get("ZOMBIE_TOOLS_ROOT")
+    if project_root:
+        return Path(project_root).expanduser() / "BACKUP"
     return Path.home() / "Zombie-Tools" / "BACKUP"
 
 def remote_backup_directory(username):

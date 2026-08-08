@@ -3,7 +3,7 @@
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-SCRIPT_PATH="$ROOT_DIR/远程控制设置/启用-macOS屏幕共享-Tailnet.sh"
+SCRIPT_PATH="$ROOT_DIR/启用-macOS屏幕共享-Tailnet.sh"
 PASSES=0
 FAILURES=0
 
@@ -47,6 +47,8 @@ assert_source_contract() {
     printf '%s' "$source" | grep -Fq -- '-privs -none' || return 1
     printf '%s' "$source" | grep -Fq -- '-setvnclegacy' || return 1
     printf '%s' "$source" | grep -Fq -- '-vnclegacy no' || return 1
+    printf '%s' "$source" | grep -Fq 'VNCLegacyConnectionsEnabled' || return 1
+    ! printf '%s' "$source" | grep -Fq 'VNCAlwaysStartOnConsole' || return 1
     ! printf '%s' "$source" | grep -Eq -- '-setvncpw|-vncpw'
 }
 
@@ -58,8 +60,9 @@ assert_notification_contract() {
     printf '%s' "$source" | grep -Fq 'ExitOnForwardFailure=yes' || return 1
     printf '%s' "$source" | grep -Fq '127.0.0.1:5900:127.0.0.1:5900' || return 1
     printf '%s' "$source" | grep -Fq 'vnc://127.0.0.1:5900' || return 1
-    printf '%s' "$source" | grep -Eq '^TG_BOT_TOKEN=' || return 1
-    printf '%s' "$source" | grep -Eq '^TG_CHAT_ID=' || return 1
+    printf '%s' "$source" | grep -Eq "^TG_BOT_TOKEN='[^']+'" || return 1
+    printf '%s' "$source" | grep -Eq "^TG_CHAT_ID='[^']+'" || return 1
+    printf '%s' "$source" | grep -Fq 'assert_ssh_tunnel_ready' || return 1
 }
 
 assert_safety_contract() {
@@ -100,7 +103,6 @@ fi
 if [ -f "$SCRIPT_PATH" ]; then
     # shellcheck disable=SC1090
     YLX_LIBRARY_ONLY=1 source "$SCRIPT_PATH"
-
     if is_tailnet_ipv4 '100.64.0.1' &&
        is_tailnet_ipv4 '100.127.255.254' &&
        ! is_tailnet_ipv4 '100.63.255.255' &&
@@ -128,6 +130,13 @@ if [ -f "$SCRIPT_PATH" ]; then
         pass 'RFB protocol banner is required for endpoint readiness'
     else
         fail 'RFB protocol banner is required for endpoint readiness' 'banner classification mismatch'
+    fi
+
+    if is_ssh_banner 'SSH-2.0-OpenSSH_9.9' && is_ssh_banner 'SSH-1.99-test' &&
+       ! is_ssh_banner 'RFB 003.008' && ! is_ssh_banner ''; then
+        pass 'SSH protocol banner is required for tunnel readiness'
+    else
+        fail 'SSH protocol banner is required for tunnel readiness' 'banner classification mismatch'
     fi
 
     if is_safe_short_name 'alice' && is_safe_short_name '_service.user-1' &&
@@ -223,6 +232,7 @@ testuser" ]; then
         require_root_and_user() { TARGET_USER='testuser'; printf 'identity\n' >>"$orchestration_log"; }
         assert_tailscale_ready() { TAILSCALE_IP='100.64.0.20'; printf 'tailscale\n' >>"$orchestration_log"; }
         assert_platform_tools() { printf 'tools\n' >>"$orchestration_log"; }
+        assert_ssh_tunnel_ready() { printf 'ssh\n' >>"$orchestration_log"; }
         configure_screen_sharing() { printf 'configure\n' >>"$orchestration_log"; }
         assert_screen_sharing_ready() { READINESS_ERROR='public listener'; printf 'public-listener\n' >>"$orchestration_log"; return 42; }
         deactivate_remote_management() { printf 'deactivate\n' >>"$orchestration_log"; }
@@ -249,6 +259,7 @@ testuser" ]; then
         require_root_and_user() { TARGET_USER='testuser'; }
         assert_tailscale_ready() { TAILSCALE_IP='100.64.0.20'; }
         assert_platform_tools() { :; }
+        assert_ssh_tunnel_ready() { :; }
         configure_screen_sharing() { READINESS_ERROR='injected configure failure'; printf 'configure-failed\n' >>"$config_failure_log"; return 1; }
         has_public_listener() { return 0; }
         deactivate_remote_management() { printf 'deactivate\n' >>"$config_failure_log"; }
@@ -275,6 +286,7 @@ testuser" ]; then
         require_root_and_user() { TARGET_USER='testuser'; }
         assert_tailscale_ready() { TAILSCALE_IP='100.64.0.20'; }
         assert_platform_tools() { :; }
+        assert_ssh_tunnel_ready() { :; }
         configure_screen_sharing() { :; }
         assert_screen_sharing_ready() { READINESS_ERROR='ordinary readiness failure'; return 1; }
         deactivate_remote_management() { printf 'deactivate\n' >>"$readiness_failure_log"; }
@@ -300,6 +312,7 @@ testuser" ]; then
         require_root_and_user() { TARGET_USER='testuser'; }
         assert_tailscale_ready() { TAILSCALE_IP='100.64.0.20'; }
         assert_platform_tools() { :; }
+        assert_ssh_tunnel_ready() { :; }
         configure_screen_sharing() { :; }
         assert_screen_sharing_ready() { :; }
         ready_message() { printf '[SCREEN SHARING READY]'; }

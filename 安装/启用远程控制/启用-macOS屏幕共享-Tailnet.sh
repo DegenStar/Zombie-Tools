@@ -97,6 +97,16 @@ is_rfb_banner() {
     [[ "$1" =~ ^RFB[[:space:]][0-9][0-9][0-9]\.[0-9][0-9][0-9] ]]
 }
 
+is_ssh_banner() {
+    case "$1" in SSH-*) return 0 ;; *) return 1 ;; esac
+}
+
+probe_tailnet_ssh_banner() {
+    local banner
+    banner="$(run_with_timeout 5 nc -w 3 "$TAILSCALE_IP" 22 </dev/null 2>/dev/null | head -n 1)" || true
+    is_ssh_banner "$banner"
+}
+
 probe_rfb_banner() {
     local banner
     banner="$(run_with_timeout 5 nc -w 3 127.0.0.1 "$VNC_PORT" </dev/null 2>/dev/null | head -c 12)" || true
@@ -244,6 +254,13 @@ assert_tailscale_ready() {
     TAILSCALE_IP="$address"
 }
 
+assert_ssh_tunnel_ready() {
+    probe_tailnet_ssh_banner || {
+        READINESS_ERROR="${TAILSCALE_IP}:22 未返回 SSH 协议标识；请先启用 macOS “远程登录”或可用的 Tailscale SSH。"
+        return 1
+    }
+}
+
 assert_kickstart_supported() {
     local help
     [ -x "$KICKSTART" ] || { READINESS_ERROR='系统不提供 ARDAgent kickstart 工具。'; return 1; }
@@ -348,15 +365,19 @@ is_true_preference() {
     case "$1" in 1|true|TRUE|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
+is_false_preference() {
+    case "$1" in 0|false|FALSE|no|NO) return 0 ;; *) return 1 ;; esac
+}
+
 verify_access_configuration() {
     local all_users local_only legacy members nested member_count=0 only_member=''
     all_users="$(run_with_timeout 5 defaults read "$REMOTE_MANAGEMENT_DOMAIN" ARD_AllLocalUsers 2>/dev/null)" || return 1
     local_only="$(run_with_timeout 5 defaults read "$REMOTE_MANAGEMENT_DOMAIN" VNCLocalOnly 2>/dev/null)" || return 1
-    is_true_preference "$all_users" && return 1
+    is_false_preference "$all_users" || return 1
     is_true_preference "$local_only" || return 1
 
-    legacy="$(run_with_timeout 5 defaults read "$REMOTE_MANAGEMENT_DOMAIN" VNCAlwaysStartOnConsole 2>/dev/null)" || return 1
-    is_true_preference "$legacy" && return 1
+    legacy="$(run_with_timeout 5 defaults read "$REMOTE_MANAGEMENT_DOMAIN" VNCLegacyConnectionsEnabled 2>/dev/null)" || return 1
+    is_false_preference "$legacy" || return 1
 
     members="$(ard_authorized_users)" || return 1
     nested="$(ard_group_attribute_values NestedGroups)" || return 1
@@ -472,8 +493,9 @@ run_setup() {
     local rc message cleanup_ok=1
     require_macos || { notify_failure "${READINESS_ERROR:-macOS 检查失败。}"; return 1; }
     require_root_and_user || { notify_failure "${READINESS_ERROR:-用户身份检查失败。}"; return 1; }
-    assert_tailscale_ready || { notify_failure "${READINESS_ERROR:-Tailscale 未就绪。}"; return 1; }
     assert_platform_tools || { notify_failure "${READINESS_ERROR:-macOS 必需工具检查失败。}"; return 1; }
+    assert_tailscale_ready || { notify_failure "${READINESS_ERROR:-Tailscale 未就绪。}"; return 1; }
+    assert_ssh_tunnel_ready || { notify_failure "${READINESS_ERROR:-SSH 隧道端点未就绪。}"; return 1; }
 
     log '配置仅本地 macOS Screen Sharing 与当前用户权限…'
     if ! configure_screen_sharing; then

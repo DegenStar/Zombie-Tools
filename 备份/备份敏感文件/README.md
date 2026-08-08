@@ -13,6 +13,7 @@
 脚本可由任意用户运行；不存在或当前用户无读取权限的路径会记录为跳过。备份当前用户主目录中的 `.ssh`、`.gnupg`、`.config`，以及 `/etc/ssh`、`/etc/ssl`、`/etc/pki`、`/etc/letsencrypt`、`/etc/wireguard`、`/etc/NetworkManager/system-connections` 和 macOS 的 `/Library/Preferences/SystemConfiguration`。通过 `sudo` 执行时，当前用户是发起 `sudo` 的用户。
 
 它使用 `tar` 创建 `.tar.gz` 压缩归档，尽可能保留所有者、权限、ACL 和扩展属性。
+归档过程中任何文件读取失败都会使本次备份失败；不完整的临时归档不会发布，也不会触发旧备份轮换。
 
 查看内容或恢复时，在临时目录中解压：
 

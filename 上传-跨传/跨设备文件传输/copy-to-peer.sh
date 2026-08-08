@@ -47,11 +47,18 @@ usage() { sed -n '2,45p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --to)       OPT_TO="${2:-}";   shift 2 ;;
-        --src)      OPT_SRC="${2:-}";  shift 2 ;;
-        --dst)      OPT_DST="${2:-}";  shift 2 ;;
-        --user)     OPT_USER="${2:-}"; shift 2 ;;
-        --port)     OPT_PORT="${2:-}"; shift 2 ;;
+        --to|--src|--dst|--user|--port)
+            opt="$1"
+            [ "$#" -ge 2 ] || { printf '选项 %s 需要一个参数\n' "$opt" >&2; exit 2; }
+            case "$opt" in
+                --to)   OPT_TO="$2" ;;
+                --src)  OPT_SRC="$2" ;;
+                --dst)  OPT_DST="$2" ;;
+                --user) OPT_USER="$2" ;;
+                --port) OPT_PORT="$2" ;;
+            esac
+            shift 2
+            ;;
         --list)     DO_LIST=1;    shift ;;
         --scp)      FORCE_SCP=1;  shift ;;
         --dry-run)  DRY_RUN=1;    shift ;;
@@ -545,8 +552,10 @@ main() {
             if [ "$DRY_RUN" -eq 0 ]; then
                 if [ "$REMOTE_IS_WINDOWS" -eq 1 ]; then
                     # Windows OpenSSH 默认 shell 可能是 cmd.exe, mkdir -p 不可用
-                    ssh -p "$OPT_PORT" -o StrictHostKeyChecking=accept-new "$t_user@$t_ip" \
-                        "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '${dst}' | Out-Null\"" \
+                    # 路径经标准输入传递, 避免被 cmd.exe / PowerShell 二次解析。
+                    printf '%s' "$dst" | ssh -p "$OPT_PORT" -o StrictHostKeyChecking=accept-new \
+                        "$t_user@$t_ip" \
+                        'powershell -NoProfile -NonInteractive -Command "$p=[Console]::In.ReadToEnd(); New-Item -ItemType Directory -Force -LiteralPath $p | Out-Null"' \
                         >/dev/null 2>&1 || true
                 else
                     ssh -p "$OPT_PORT" -o StrictHostKeyChecking=accept-new "$t_user@$t_ip" \
