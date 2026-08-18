@@ -1,8 +1,8 @@
-#*test*
+*test*
 __pycache__/
-#tests/
-#.agents/
-#.codex/
-#docs/
+tests/
+.agents/
+.codex/
+docs/
 *🔴*
 /BACKUP/敏感文件/
