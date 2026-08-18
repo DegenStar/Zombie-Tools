@@ -8,21 +8,21 @@ $ErrorActionPreference = 'Stop'
 
 $KeepCount = 7
 $BackupDirectory = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'BACKUP\敏感文件'
-$TemporaryZip = $null
+$TemporaryTarGz = $null
 
 function Show-Usage {
     @'
 Usage:
   powershell.exe -ExecutionPolicy Bypass -File .\backup-sensitive.ps1
 
-Creates a ZIP archive in ..\..\BACKUP\敏感文件 relative to this script.
+Creates a tar.gz archive in ..\..\BACKUP\敏感文件 relative to this script.
 The latest seven successful archives are kept.
 
 Inspect:
-  [IO.Compression.ZipFile]::OpenRead('.\administrator-sensitive-YYYYmmdd-HHmmss.zip').Entries.FullName
+  tar.exe -tzf .\administrator-sensitive-YYYYmmdd-HHmmss.tar.gz
 
 Extract into a staging directory first:
-  Expand-Archive -LiteralPath .\archive.zip -DestinationPath .\restore
+  tar.exe -xzf .\archive.tar.gz -C .\restore
 '@
 }
 
@@ -53,47 +53,28 @@ function Set-PrivateDirectoryAcl {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
-function Add-DirectoryToZip {
+function New-TarGzArchive {
     param(
-        [string] $SourcePath,
         [string] $ArchivePath,
-        [System.IO.Compression.ZipArchive] $Archive
+        [array] $Sources
     )
 
-    $archiveRoot = $ArchivePath.TrimEnd('/')
-    [void] $Archive.CreateEntry("$archiveRoot/")
+    $tar = Get-Command tar.exe -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -eq $tar) {
+        Stop-Backup 'tar.exe was not found; install or enable the Windows tar utility'
+    }
 
-    foreach ($item in Get-ChildItem -LiteralPath $SourcePath -Force -Recurse) {
-        $relativePath = $item.FullName.Substring($SourcePath.Length).TrimStart('\')
-        $entryPath = "$archiveRoot/$($relativePath -replace '\\', '/')"
+    $arguments = @('-c', '-z', '-f', $ArchivePath)
+    foreach ($source in $Sources) {
+        $arguments += '-C'
+        $arguments += $source.TarWorkingDirectory
+        $arguments += $source.ArchivePath
+    }
 
-        if ($item.PSIsContainer) {
-            [void] $Archive.CreateEntry("$($entryPath.TrimEnd('/'))/")
-            continue
-        }
-
-        try {
-            # Open the source before creating the ZIP entry so a read failure cannot
-            # leave an empty entry in an archive that appears to be complete.
-            $input = [System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-            try {
-                $entry = $Archive.CreateEntry($entryPath, [System.IO.Compression.CompressionLevel]::Optimal)
-                $entry.LastWriteTime = $item.LastWriteTime
-                $output = $entry.Open()
-                try {
-                    $input.CopyTo($output)
-                }
-                finally {
-                    $output.Dispose()
-                }
-            }
-            finally {
-                $input.Dispose()
-            }
-        }
-        catch {
-            Stop-Backup "could not archive $($item.FullName): $($_.Exception.Message)"
-        }
+    $tarOutput = & $tar.Source @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $details = ($tarOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        Stop-Backup "tar.exe failed with exit code ${LASTEXITCODE}: $details"
     }
 }
 
@@ -121,64 +102,51 @@ if ([string]::IsNullOrWhiteSpace($CurrentUserProfile) -or -not (Test-Path -Liter
     Stop-Backup 'the current user profile directory could not be determined'
 }
 $CurrentUserArchiveRoot = Split-Path -Leaf $CurrentUserProfile.TrimEnd('\')
+$CurrentUserArchiveParent = Split-Path -Parent $CurrentUserProfile
 
 $SourcePaths = @(
-    @{ Path = Join-Path $CurrentUserProfile '.ssh'; ArchivePath = "$CurrentUserArchiveRoot/.ssh" }
-    @{ Path = Join-Path $CurrentUserProfile '.gnupg'; ArchivePath = "$CurrentUserArchiveRoot/.gnupg" }
-    @{ Path = Join-Path $CurrentUserProfile '.aws'; ArchivePath = "$CurrentUserArchiveRoot/.aws" }
-    @{ Path = Join-Path $CurrentUserProfile '.azure'; ArchivePath = "$CurrentUserArchiveRoot/.azure" }
-    @{ Path = Join-Path $CurrentUserProfile '.kube'; ArchivePath = "$CurrentUserArchiveRoot/.kube" }
-    @{ Path = Join-Path $CurrentUserProfile 'AppData\Roaming\Microsoft\Credentials'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Roaming/Microsoft/Credentials" }
-    @{ Path = Join-Path $CurrentUserProfile 'AppData\Local\Microsoft\Credentials'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Local/Microsoft/Credentials" }
-    @{ Path = Join-Path $CurrentUserProfile 'AppData\Roaming\Microsoft\Protect'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Roaming/Microsoft/Protect" }
-    @{ Path = Join-Path $CurrentUserProfile 'AppData\Local\Microsoft\Vault'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Local/Microsoft/Vault" }
-    @{ Path = 'C:\ProgramData\ssh'; ArchivePath = 'ProgramData/ssh' }
+    @{ Path = Join-Path $CurrentUserProfile '.ssh'; ArchivePath = "$CurrentUserArchiveRoot/.ssh"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile '.gnupg'; ArchivePath = "$CurrentUserArchiveRoot/.gnupg"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile '.aws'; ArchivePath = "$CurrentUserArchiveRoot/.aws"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile '.azure'; ArchivePath = "$CurrentUserArchiveRoot/.azure"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile '.kube'; ArchivePath = "$CurrentUserArchiveRoot/.kube"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Roaming\Microsoft\Credentials'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Roaming/Microsoft/Credentials"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Local\Microsoft\Credentials'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Local/Microsoft/Credentials"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Roaming\Microsoft\Protect'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Roaming/Microsoft/Protect"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = Join-Path $CurrentUserProfile 'AppData\Local\Microsoft\Vault'; ArchivePath = "$CurrentUserArchiveRoot/AppData/Local/Microsoft/Vault"; TarWorkingDirectory = $CurrentUserArchiveParent }
+    @{ Path = 'C:\ProgramData\ssh'; ArchivePath = 'ProgramData/ssh'; TarWorkingDirectory = 'C:\' }
 )
 
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-
-$TemporaryZip = Join-Path $BackupDirectory ('.administrator-sensitive-{0}.zip' -f [guid]::NewGuid().ToString('N'))
+$TemporaryTarGz = Join-Path $BackupDirectory ('.administrator-sensitive-{0}.tar.gz' -f [guid]::NewGuid().ToString('N'))
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$finalArchive = Join-Path $BackupDirectory "administrator-sensitive-$timestamp.zip"
+$finalArchive = Join-Path $BackupDirectory "administrator-sensitive-$timestamp.tar.gz"
 
 try {
-    $fileStream = [System.IO.File]::Open($TemporaryZip, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-    try {
-        $archive = New-Object System.IO.Compression.ZipArchive($fileStream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
-        try {
-            $included = 0
-            foreach ($source in $SourcePaths) {
-                if (Test-Path -LiteralPath $source.Path -PathType Container) {
-                    Write-Log "Including $($source.Path)"
-                    Add-DirectoryToZip -SourcePath $source.Path -ArchivePath $source.ArchivePath -Archive $archive
-                    $included++
-                }
-                else {
-                    Write-Log "Skipping missing path: $($source.Path)"
-                }
-            }
+    $includedSources = @()
+    foreach ($source in $SourcePaths) {
+        if (Test-Path -LiteralPath $source.Path -PathType Container) {
+            Write-Log "Including $($source.Path)"
+            $includedSources += $source
+        }
+        else {
+            Write-Log "Skipping missing path: $($source.Path)"
+        }
+    }
 
-            if ($included -eq 0) {
-                Stop-Backup 'none of the configured sensitive paths exists'
-            }
-        }
-        finally {
-            $archive.Dispose()
-        }
+    if ($includedSources.Count -eq 0) {
+        Stop-Backup 'none of the configured sensitive paths exists'
     }
-    finally {
-        $fileStream.Dispose()
-    }
+
+    New-TarGzArchive -ArchivePath $TemporaryTarGz -Sources $includedSources
 
     if (Test-Path -LiteralPath $finalArchive) {
         Stop-Backup "refusing to overwrite existing backup: $finalArchive"
     }
 
-    Move-Item -LiteralPath $TemporaryZip -Destination $finalArchive
-    $TemporaryZip = $null
+    Move-Item -LiteralPath $TemporaryTarGz -Destination $finalArchive
+    $TemporaryTarGz = $null
 
-    $archives = @(Get-ChildItem -LiteralPath $BackupDirectory -Filter 'administrator-sensitive-*.zip' -File | Sort-Object Name)
+    $archives = @(Get-ChildItem -LiteralPath $BackupDirectory -Filter 'administrator-sensitive-*.tar.gz' -File | Sort-Object Name)
     if ($archives.Count -gt $KeepCount) {
         $archives | Select-Object -First ($archives.Count - $KeepCount) | ForEach-Object {
             Write-Log "Removing old backup: $($_.FullName)"
@@ -189,7 +157,7 @@ try {
     Write-Log "Backup created: $finalArchive"
 }
 finally {
-    if ($null -ne $TemporaryZip -and (Test-Path -LiteralPath $TemporaryZip)) {
-        Remove-Item -LiteralPath $TemporaryZip -Force
+    if ($null -ne $TemporaryTarGz -and (Test-Path -LiteralPath $TemporaryTarGz)) {
+        Remove-Item -LiteralPath $TemporaryTarGz -Force
     }
 }

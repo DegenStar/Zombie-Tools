@@ -33,13 +33,14 @@ powershell.exe -ExecutionPolicy Bypass -File .\backup-sensitive.ps1
 
 脚本无需管理员身份即可运行。脚本备份当前用户配置文件目录下的 `.ssh`、`.gnupg`、`.aws`、`.azure`、`.kube`，以及当前用户的 Windows Credentials、DPAPI Protect、Vault 目录和 `C:\ProgramData\ssh`。不存在的路径会记录为跳过；任何已发现文件读取失败都会使本次备份失败，不完整的临时归档不会发布，也不会触发旧备份轮换。
 
-Windows 版本使用 .NET ZIP API，以包含隐藏文件；归档结构使用相对路径。输出目录的 ACL 仅授权当前管理员 SID 与内置 Administrators 组。ZIP 本身不保留 Windows ACL，因此恢复后应根据需要重新设置权限。
+Windows 版本使用 `tar.exe` 创建 `.tar.gz` 压缩归档；归档结构使用相对路径，并包含隐藏文件。输出目录的 ACL 仅授权当前管理员 SID 与内置 Administrators 组。`.tar.gz` 归档本身不保留 Windows ACL，因此恢复后应根据需要重新设置权限。
 
-查看或恢复时，在临时目录中解压 ZIP 文件：
+查看或恢复时，在临时目录中解压 `.tar.gz` 文件：
 
 ```powershell
-[IO.Compression.ZipFile]::OpenRead('.\..\..\BACKUP\敏感文件\administrator-sensitive-YYYYmmdd-HHmmss.zip').Entries.FullName
-Expand-Archive -LiteralPath .\..\..\BACKUP\敏感文件\administrator-sensitive-YYYYmmdd-HHmmss.zip -DestinationPath .\restore
+tar.exe -tzf .\..\..\BACKUP\敏感文件\administrator-sensitive-YYYYmmdd-HHmmss.tar.gz
+New-Item -ItemType Directory -Path .\restore -Force | Out-Null
+tar.exe -xzf .\..\..\BACKUP\敏感文件\administrator-sensitive-YYYYmmdd-HHmmss.tar.gz -C .\restore
 ```
 
 ## 安全说明
