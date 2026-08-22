@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+*.py[cod]
+*.log
+exports/
+
+# The repository-level ignore file excludes every tests directory.
+!tests/
+!tests/**
+tests/__pycache__/

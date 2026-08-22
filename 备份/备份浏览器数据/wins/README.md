@@ -21,6 +21,8 @@
 - 使用 AES-256-GCM 加密导出文件
 - 自动使用预设密码 `cookies2026` 加密
 - **支持浏览器运行时导出**（无需关闭浏览器）
+- 遇到 Chromium v20/App-Bound 字段时生成带警告的部分备份，并返回非零退出码
+- 支持 `--output-dir` 指定导出目录
 
 ### 2. 导入工具 (`import_browser_data.py`)
 - 将加密的备份文件导入到新环境的浏览器
@@ -30,6 +32,8 @@
 - 支持更新已存在的条目
 - 自动填充按字段名和值覆盖；信用卡优先按 GUID 覆盖
 - **命令行参数支持**：`-l` 列出文件，`-n` 指定文件编号，`-f` 指定文件路径
+- 支持 `--exports-dir` 指定默认备份目录；`-f` 不依赖默认目录
+- 数据库写入采用整批事务，任一条目失败时回滚该数据库
 
 ### 3. 转换工具 (`convert_to_txt.py`)
 - 将加密的备份文件转换为可读的 txt 文件
@@ -37,6 +41,7 @@
 - **自动解密**：使用预设密码自动解密文件
 - **格式化输出**：将 Cookies 和密码格式化为易读的文本格式
 - 输出文件包含完整的浏览器数据信息（导出时间、用户名、各 Profile 的详细数据）
+- 支持 `-f` 直接指定文件及 `--exports-dir` 指定默认目录
 
 ---
 
@@ -55,6 +60,26 @@
 pip install -r requirements.txt
 ```
 > `psutil` 用于检测浏览器是否正在运行；未安装时脚本会回退到 Windows `tasklist` 检测。
+
+建议使用项目虚拟环境安装和运行：
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### 测试
+
+回归测试不会访问真实浏览器数据：
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+```
+
+真实数据库集成测试仅只读源 Profile；写入测试使用自动删除的临时副本和虚构记录。运行前应完全关闭对应浏览器及后台进程：
+```powershell
+.venv\Scripts\python.exe -X utf8 tests\integration_real_browser.py --browser Chrome
+.venv\Scripts\python.exe -X utf8 tests\integration_real_browser.py --browser Edge
+.venv\Scripts\python.exe -X utf8 tests\integration_real_browser.py --browser Brave
+```
 
 ---
 
@@ -83,7 +108,7 @@ python export_browser_data.py
 
 4. 脚本将自动使用预设密码 `cookies2026` 加密数据
 
-5. 导出文件保存在 `exports/` 目录，格式为：
+5. 导出文件默认保存在仓库共享的 `BACKUP/浏览器数据/exports/` 目录，也可使用 `--output-dir` 指定，格式为：
    ```
    {用户名}_browser_data_YYYYMMDD_HHMMSS.encrypted
    ```
@@ -92,6 +117,8 @@ python export_browser_data.py
 **注意**：脚本支持在浏览器运行时导出数据，使用了以下技术：
 - Windows 文件系统级复制（允许读取被锁定文件）
 - SQLite 在线备份 API（作为备用方案）
+
+如果检测到 v20/App-Bound Encryption，工具不会尝试绕过浏览器的安全机制。它会汇总跳过的字段、将文件标记为部分备份并返回非零退出码。此时请使用浏览器官方同步或迁移功能处理对应数据。
 
 ### 步骤 2：备份导出文件
 
@@ -138,6 +165,8 @@ python import_browser_data.py --file exports/zhang_browser_data_20260202_092203.
 ```
 直接指定完整的文件路径（相对路径或绝对路径）。
 
+`-f/--file` 可以指向默认导出目录之外的文件。需要改变交互式列表目录时，使用 `--exports-dir DIR`。
+
 4. 导入流程：
    - 查看导出文件的数据统计（包含哪些 Profile 的数据）
    - **如果导出文件包含多个 Profile**：选择要导入的 Profile 或合并所有数据
@@ -154,6 +183,11 @@ python import_browser_data.py --file exports/zhang_browser_data_20260202_092203.
 1. 运行转换脚本：
 ```bash
 python convert_to_txt.py
+```
+
+也可以直接指定文件：
+```bash
+python convert_to_txt.py -f D:\backup\file.encrypted
 ```
 
 2. 脚本会列出所有可用的 `.encrypted` 文件：
@@ -173,6 +207,7 @@ python convert_to_txt.py
    - 导出时间和用户名
    - 每个浏览器的 Cookies 列表（域名、名称、值、路径、过期时间等）
    - 每个浏览器的密码列表（URL、用户名、密码）
+   - 每个浏览器的自动填充和本地信用卡信息
 
 **注意**：转换后的 txt 文件包含**明文密码**，请妥善保管，使用完毕后立即删除。
 
@@ -278,7 +313,11 @@ python convert_to_txt.py
 
 ### 问题 5：NOT NULL constraint failed 错误
 - **原因**：数据库表结构不匹配
-- **解决**：脚本已自动处理，如果仍有问题，请检查浏览器版本是否过旧
+- **解决**：工具会识别目标 schema 的必填列并回滚本批写入；请保留错误中的未知列名并更新适配代码
+
+### 问题 6：提示 v20/App-Bound 字段已跳过
+- **原因**：新版 Chromium 使用 App-Bound Encryption 保护部分敏感字段
+- **解决**：生成的文件是不完整备份；请使用浏览器官方同步或迁移功能处理这些字段
 
 ---
 
@@ -338,6 +377,7 @@ python convert_to_txt.py
 - Mac/Linux 系统（DPAPI 是 Windows 特有）
 - Firefox（使用不同的加密机制）
 - 其他 Chromium 浏览器（可能需要调整路径）
+- 绕过 Chromium v20/App-Bound Encryption；检测到时仅导出仍可正常解密的数据
 
 ### 跨用户账户支持
 
@@ -381,6 +421,7 @@ python convert_to_txt.py
 | `--file` | `-f` | 直接指定要导入的文件路径 | `-f exports/file.encrypted` |
 | `--number` | `-n` | 通过文件编号选择文件 | `-n 1` |
 | `--list` | `-l` | 仅列出可用的导出文件 | `-l` |
+| `--exports-dir` |  | 指定交互式列表使用的默认目录 | `--exports-dir D:\backup` |
 
 **使用示例**：
 ```bash
@@ -407,8 +448,9 @@ python import_browser_data.py -f exports/zhang_browser_data_20260202_092203.encr
 ├── export_browser_data.py      # 导出工具（支持多 Profile）
 ├── import_browser_data.py      # 导入工具（支持多 Profile，命令行参数）
 ├── convert_to_txt.py           # 转换工具（将加密文件转为 txt）
-├── main.py                     # 基础解密示例
-└── exports/                    # 导出文件目录（自动创建）
+└── browser_utils.py            # 公共路径、控制台输出和备份校验
+
+BACKUP/浏览器数据/exports/      # 默认导出目录（首次导出时创建）
     ├── {用户名}_browser_data_*.encrypted  # 加密备份文件
     └── {用户名}_browser_data_*.txt         # 转换后的文本文件（可选）
 ```

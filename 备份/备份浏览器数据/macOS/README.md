@@ -34,7 +34,7 @@
 - **macOS 10.15+**
 
 ### Python 版本
-- Python 3.7+
+- Python 3.8+
 
 ### 依赖库
 ```bash
@@ -49,42 +49,40 @@ pip3 install -r requirements.txt
 
 1. 运行导出脚本（**无需关闭浏览器**）：
 ```bash
-chmod +x 导出浏览器数据.sh
-./导出浏览器数据.sh
-# 或直接运行
 python3 export_browser_data.py
 ```
 
 2. 脚本将自动使用预设密码 `cookies2026` 加密数据
 
-3. 导出文件保存在 `exports/` 目录，格式为：
+3. 导出文件统一保存在 `Zombie-Tools/BACKUP/浏览器数据/exports/macOS/`，格式为：
    ```
-   browser_data_YYYYMMDD_HHMMSS.encrypted
+   {用户名}_browser_data_YYYYMMDD_HHMMSS.encrypted
    ```
 
 **注意**：脚本支持在浏览器运行时导出数据，使用了以下技术：
-- 文件系统级复制（允许读取被锁定文件）
-- SQLite 在线备份 API（作为备用方案）
+- SQLite Online Backup API 创建包含 WAL 数据的一致快照
+- 快照只保存在系统私有临时目录，并在读取完成后自动清理
+- 任一数据库读取、结构识别或字段解密失败时中止，不生成不完整备份
 
 ### 步骤 2：备份导出文件
 
-将 `exports/` 目录中的 `.encrypted` 文件**安全备份**：
+将 `Zombie-Tools/BACKUP/浏览器数据/exports/macOS/` 中的 `.encrypted` 文件**安全备份**：
 - 使用加密的 U 盘或移动硬盘
 - 或上传到**私有**加密云存储（需二次加密）
 - **不要**使用公共云盘或邮箱
 
 ### 步骤 3：在新环境导入
 
-1. 将 `.encrypted` 文件复制到新机器的 `exports/` 目录
+1. 将 `.encrypted` 文件复制到新机器的 `Zombie-Tools/BACKUP/浏览器数据/exports/macOS/` 目录；也可以通过 `--file` 指定任意位置
 
 2. **关闭所有浏览器窗口**（重要！）
 
 3. 运行导入脚本：
 ```bash
-chmod +x 导入浏览器数据.sh
-./导入浏览器数据.sh
-# 或直接运行
 python3 import_browser_data.py
+
+# 直接导入指定文件，不依赖默认导出目录
+python3 import_browser_data.py --file /path/to/backup.encrypted
 ```
 
 4. 选择要导入的文件编号
@@ -94,6 +92,8 @@ python3 import_browser_data.py
 6. 确认导入（输入 `yes`）
 
 7. **重启浏览器**以应用更改
+
+导入前会通过 SQLite Online Backup 创建当前数据库的一致备份。任一请求的数据写入失败或被跳过时，程序会明确显示失败摘要并返回非零退出码。
 
 ---
 
@@ -194,19 +194,20 @@ python3 import_browser_data.py
 ### 在线导出技术
 **不关闭浏览器也能导出的原理**：
 
-1. **文件系统特性**
-   - macOS 允许读取被进程锁定的文件
-   - 使用二进制读取绕过某些锁定限制
-
-2. **SQLite 在线备份**
+1. **SQLite 在线备份**
    - 使用 `sqlite3.Connection.backup()` API
    - 以只读模式打开数据库（`mode=ro`）
+   - 将主数据库和 WAL 中已提交的数据复制到一致快照
    - 不影响浏览器的正常使用
 
-3. **多重尝试机制**
-   - 优先使用直接复制（最快）
-   - 失败时使用二进制读写
-   - 最后尝试 SQLite 在线备份
+2. **私有临时快照**
+   - 快照位于系统临时目录，而不是长期保存的导出目录
+   - 文件权限限制为仅当前用户可读写
+   - 无论成功或失败都会在退出读取流程时清理
+
+3. **完整性优先**
+   - 数据库结构不兼容、快照失败或敏感字段无法解密时终止导出
+   - 不再把读取错误当作“没有数据”继续生成备份
 
 **注意**：虽然支持在线导出，但数据可能略有延迟（浏览器可能还在写入新数据）
 
@@ -219,8 +220,10 @@ python3 import_browser_data.py
 ### 导入流程
 1. 使用密码 `cookies2026` 解密导出文件（获得明文数据）
 2. 获取**目标 Mac**浏览器主密钥（从 Keychain）
-3. 使用目标主密钥**重新加密**敏感数据（包括信用卡卡号）
-4. 写入目标浏览器数据库
+3. 通过 SQLite Online Backup 备份目标数据库；备份失败则停止写入
+4. 使用目标主密钥**重新加密**敏感数据（包括信用卡卡号）
+5. 在 SQLite 事务中写入目标数据库，异常时自动回滚
+6. 汇总每类数据的成功/失败数量，并用进程退出码反映最终结果
 
 **关键点**：脚本在中间环节将数据转换为明文，因此不受 Keychain 用户绑定限制
 
@@ -262,6 +265,8 @@ python3 import_browser_data.py
 - 部分网站可能需要重新登录（Cookie 过期或额外验证机制）
 - Edge 的某些数据可能需要额外的 Keychain 权限
 - 导入后首次使用可能需要重新验证某些敏感操作
+- 浏览器数据库结构会随版本变化；遇到未知必填字段时，脚本会安全失败并保留导入前备份
+- 固定密码 `cookies2026` 仍是安全限制，应对导出文件进行二次加密并避免上传公共位置
 
 ---
 
@@ -277,14 +282,18 @@ python3 import_browser_data.py
 ## 相关文件
 
 ```
-备份浏览器cookies和密码/macos/
+备份/备份浏览器数据/macOS/
 ├── README.md                   # 本文档
+├── browser_backup_common.py    # 统一路径和安全文件写入
+├── convert_to_txt.py           # 将加密备份转换为明文（高敏感操作）
 ├── export_browser_data.py      # 导出工具
 ├── import_browser_data.py      # 导入工具
-├── 导出浏览器数据.sh           # 导出快捷启动
-├── 导入浏览器数据.sh           # 导入快捷启动
-└── exports/                    # 导出文件目录（自动创建）
-    └── browser_data_*.encrypted
+├── requirements.txt            # Python 依赖
+└── tests/
+    └── test_browser_data.py     # 不访问真实浏览器数据的自动化测试
+
+Zombie-Tools/BACKUP/浏览器数据/exports/macOS/
+└── {用户名}_browser_data_*.encrypted
 ```
 
 ---
@@ -300,16 +309,23 @@ python3 import_browser_data.py
 - Edge 使用 Chromium 数据库和 Microsoft Edge Safe Storage
 - 首次访问 Keychain 时需要授予脚本权限
 
-### 脚本权限
-运行前需要给脚本执行权限：
+### 运行测试
 ```bash
-chmod +x 导出浏览器数据.sh
-chmod +x 导入浏览器数据.sh
+python3 -m unittest discover -s tests -v
 ```
 
 ---
 
 ## 更新日志
+
+### v1.1.0 (2026-08-23)
+- 修复密码导入代码不可达问题
+- 导入结果按实际成功/失败汇总并返回正确退出码
+- Keychain、数据库结构和解密失败时安全中止
+- 统一 macOS 导出目录和 `--file` 行为
+- 使用 SQLite Online Backup、事务回滚和私有文件权限
+- 保留分区 Cookie 和密码认证域等关键字段
+- 扩充数据库、CLI、权限和失败路径测试
 
 ### v1.0.0 (2026-01-19)
 - 初始版本

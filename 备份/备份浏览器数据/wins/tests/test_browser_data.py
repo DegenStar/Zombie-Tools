@@ -8,7 +8,9 @@ import sys
 import tempfile
 import types
 import unittest
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).parent.parent
@@ -65,11 +67,23 @@ class BrowserDataRegressionTests(unittest.TestCase):
                 exporter.output_dir,
                 Path(__file__).resolve().parents[4] / "BACKUP" / "浏览器数据" / "exports",
             )
+            importer_module = load_module("import_browser_data.py", "wins_import_dir")
+            converter_module = load_module("convert_to_txt.py", "wins_convert_dir")
+            self.assertEqual(importer_module.BrowserDataImporter().exports_dir, exporter.output_dir)
+            self.assertEqual(converter_module.get_exports_dir(), exporter.output_dir)
         finally:
             if old_localappdata is None:
                 os.environ.pop("LOCALAPPDATA", None)
             else:
                 os.environ["LOCALAPPDATA"] = old_localappdata
+
+    def test_exporter_constructor_does_not_create_output_directory(self):
+        module = load_module("export_browser_data.py", "exporter_no_side_effect")
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "not-created-yet"
+            exporter = module.BrowserDataExporter(output_dir)
+            self.assertEqual(exporter.output_dir, output_dir)
+            self.assertFalse(output_dir.exists())
 
     def test_brave_uses_user_data_directory_for_profile_discovery(self):
         module = load_module("import_browser_data.py", "browser_importer")
@@ -93,6 +107,14 @@ class BrowserDataRegressionTests(unittest.TestCase):
             module.BrowserDataImporter.cookie_identity(second),
         )
 
+    def test_cookie_identity_preserves_partition_and_source(self):
+        module = load_module("import_browser_data.py", "partition_identity")
+        base = {"host": ".example.com", "name": "session", "path": "/"}
+        partitioned = dict(base, top_frame_site_key="https://shop.example")
+        different_port = dict(base, source_scheme=2, source_port=443)
+        self.assertNotEqual(module.BrowserDataImporter.cookie_identity(base), module.BrowserDataImporter.cookie_identity(partitioned))
+        self.assertNotEqual(module.BrowserDataImporter.cookie_identity(base), module.BrowserDataImporter.cookie_identity(different_port))
+
     def test_export_payload_stores_source_browser_master_key(self):
         module = load_module("export_browser_data.py", "browser_exporter")
         payload = module.BrowserDataExporter.build_browser_payload(
@@ -106,6 +128,15 @@ class BrowserDataRegressionTests(unittest.TestCase):
         self.assertEqual(payload["profiles_count"], 1)
         self.assertEqual(payload["total_autofill"], 1)
         self.assertEqual(payload["total_credit_cards"], 1)
+
+    def test_v20_fields_are_counted_without_per_record_console_spam(self):
+        module = load_module("export_browser_data.py", "v20_exporter")
+        exporter = object.__new__(module.BrowserDataExporter)
+        exporter.v20_skipped = 0
+        with mock.patch.object(module, "print") as output:
+            self.assertIsNone(exporter.decrypt_payload(b"v20" + b"x" * 40, b"key"))
+        self.assertEqual(exporter.v20_skipped, 1)
+        output.assert_not_called()
 
     def test_autofill_and_credit_card_identities(self):
         module = load_module("import_browser_data.py", "browser_importer")
@@ -121,7 +152,7 @@ class BrowserDataRegressionTests(unittest.TestCase):
         module = load_module("import_browser_data.py", "browser_importer")
         importer = object.__new__(module.BrowserDataImporter)
         importer.encrypt_payload = lambda value, key: f"encrypted:{value}".encode()
-        importer.decrypt_payload = lambda value, key: value.decode().removeprefix("encrypted:")
+        importer.decrypt_payload = lambda value, key: value.decode()[len("encrypted:"):]
 
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "Web Data"
@@ -147,6 +178,161 @@ class BrowserDataRegressionTests(unittest.TestCase):
                 ("Ada", 12, 2030, b"encrypted:4111111111111111"),
             )
             conn.close()
+
+    def test_cookie_import_preserves_partition_keys(self):
+        module = load_module("import_browser_data.py", "partition_cookie_import")
+        importer = object.__new__(module.BrowserDataImporter)
+        importer.encrypt_payload = lambda value, key: f"encrypted:{value}".encode()
+
+        with tempfile.TemporaryDirectory() as directory:
+            network = Path(directory) / "Network"
+            network.mkdir()
+            database = network / "Cookies"
+            conn = sqlite3.connect(database)
+            conn.execute("""
+                CREATE TABLE cookies (
+                    creation_utc INTEGER NOT NULL, host_key TEXT NOT NULL,
+                    top_frame_site_key TEXT NOT NULL, name TEXT NOT NULL,
+                    value TEXT NOT NULL, encrypted_value BLOB NOT NULL,
+                    path TEXT NOT NULL, expires_utc INTEGER NOT NULL,
+                    is_secure INTEGER NOT NULL, is_httponly INTEGER NOT NULL,
+                    last_access_utc INTEGER NOT NULL, source_scheme INTEGER NOT NULL,
+                    source_port INTEGER NOT NULL, future_optional INTEGER NOT NULL DEFAULT 7,
+                    UNIQUE(host_key, top_frame_site_key, name, path, source_scheme, source_port)
+                )
+            """)
+            conn.commit()
+            conn.close()
+
+            cookies = [
+                {"host": ".example.com", "name": "sid", "value": "one", "path": "/"},
+                {"host": ".example.com", "name": "sid", "value": "two", "path": "/", "top_frame_site_key": "https://shop.example", "source_scheme": 2, "source_port": 443},
+            ]
+            self.assertTrue(importer.import_cookies("Chrome", directory, cookies, b"key"))
+            conn = sqlite3.connect(database)
+            rows = conn.execute(
+                "SELECT top_frame_site_key, source_scheme, source_port, encrypted_value, future_optional FROM cookies ORDER BY top_frame_site_key"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(rows, [
+                ("", 0, -1, b"encrypted:one", 7),
+                ("https://shop.example", 2, 443, b"encrypted:two", 7),
+            ])
+
+    def test_cookie_import_rolls_back_unknown_required_schema(self):
+        module = load_module("import_browser_data.py", "cookie_schema_rollback")
+        importer = object.__new__(module.BrowserDataImporter)
+        importer.encrypt_payload = lambda value, key: b"encrypted"
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "Cookies"
+            conn = sqlite3.connect(database)
+            conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, path TEXT, encrypted_value BLOB, required_future TEXT NOT NULL)")
+            conn.commit()
+            conn.close()
+            self.assertFalse(importer.import_cookies("Chrome", directory, [
+                {"host": ".example.com", "name": "sid", "value": "secret", "path": "/"},
+            ], b"key"))
+            conn = sqlite3.connect(database)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM cookies").fetchone()[0], 0)
+            conn.close()
+
+    def test_password_import_uses_schema_defaults(self):
+        module = load_module("import_browser_data.py", "password_schema_import")
+        importer = object.__new__(module.BrowserDataImporter)
+        importer.encrypt_payload = lambda value, key: f"encrypted:{value}".encode()
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "Login Data"
+            conn = sqlite3.connect(database)
+            conn.execute("""
+                CREATE TABLE logins (
+                    origin_url TEXT NOT NULL, username_value TEXT NOT NULL,
+                    password_value BLOB NOT NULL, signon_realm TEXT NOT NULL,
+                    date_last_used INTEGER NOT NULL, future_optional INTEGER NOT NULL DEFAULT 9
+                )
+            """)
+            conn.commit()
+            conn.close()
+            self.assertTrue(importer.import_passwords("Chrome", directory, [{
+                "url": "https://example.com/login", "username": "ada", "password": "secret",
+            }], b"key"))
+            conn = sqlite3.connect(database)
+            row = conn.execute(
+                "SELECT origin_url, username_value, password_value, signon_realm, future_optional FROM logins"
+            ).fetchone()
+            conn.close()
+            self.assertEqual(row, (
+                "https://example.com/login", "ada", b"encrypted:secret", "https://example.com/", 9,
+            ))
+
+    def test_tasklist_fallback_works_without_psutil(self):
+        module = load_module("import_browser_data.py", "tasklist_fallback")
+        module.HAS_PSUTIL = False
+        completed = types.SimpleNamespace(stdout="chrome.exe 123 Console")
+        with mock.patch.object(module.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(module.BrowserDataImporter().check_browser_running("Chrome"))
+        run.assert_called_once()
+
+    def test_direct_file_cli_does_not_require_default_exports_dir(self):
+        module = load_module("import_browser_data.py", "direct_file_cli")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "backup.encrypted"
+            source.write_text("{}", encoding="utf-8")
+            with mock.patch.object(sys, "argv", ["import_browser_data.py", "-f", str(source)]), mock.patch.object(
+                module.BrowserDataImporter, "import_all", return_value=True
+            ) as import_all:
+                self.assertEqual(module.main(), 0)
+            import_all.assert_called_once_with(source)
+
+    def test_safe_print_replaces_unsupported_console_glyphs(self):
+        import browser_utils
+
+        buffer = BytesIO()
+        stream = TextIOWrapper(buffer, encoding="gbk")
+        browser_utils.safe_print("✅ 完成", file=stream)
+        stream.flush()
+        self.assertIn(b"?", buffer.getvalue())
+
+    def test_encrypted_file_validation_rejects_invalid_envelope(self):
+        import browser_utils
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "invalid.encrypted"
+            source.write_text("{}", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                browser_utils.load_encrypted_file(source)
+
+    def test_decrypted_data_validation_rejects_invalid_nested_lists(self):
+        import browser_utils
+
+        with self.assertRaises(ValueError):
+            browser_utils.validate_decrypted_data({
+                "browsers": {"Chrome": {"profiles": {"Default": {"cookies": None}}}},
+            })
+
+    def test_txt_conversion_includes_web_data(self):
+        module = load_module("convert_to_txt.py", "txt_web_data")
+        text = module.format_data_to_txt({
+            "export_time": "2026-08-22 12:00:00",
+            "username": "tester",
+            "browsers": {
+                "Chrome": {
+                    "profiles_count": 1,
+                    "total_autofill": 1,
+                    "total_credit_cards": 1,
+                    "profiles": {"Default": {
+                        "cookies": [],
+                        "passwords": [],
+                        "autofill": [{"name": "email", "value": "me@example.com", "count": 2}],
+                        "credit_cards": [{
+                            "name_on_card": "Ada", "number": "4111",
+                            "expiration_month": 12, "expiration_year": 2030,
+                        }],
+                    }},
+                },
+            },
+        })
+        self.assertIn("me@example.com", text)
+        self.assertIn("4111", text)
 
     def test_chrome_timestamp_uses_chromium_epoch(self):
         module = load_module("import_browser_data.py", "browser_importer")

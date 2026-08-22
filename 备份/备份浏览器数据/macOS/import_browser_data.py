@@ -12,13 +12,16 @@ import os
 import json
 import base64
 import sqlite3
-import shutil
 import subprocess
 import argparse
+from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import getpass
 import time
+from typing import Optional
+
+from browser_backup_common import get_exports_dir, sqlite_readonly_uri
 
 try:
     import psutil
@@ -34,6 +37,23 @@ except ImportError:
     exit(1)
 
 
+@dataclass(frozen=True)
+class ImportResult:
+    """单类数据的导入结果。"""
+
+    requested: int
+    succeeded: int
+    failed: int
+    backup_path: Optional[str] = None
+
+    @property
+    def ok(self):
+        return self.failed == 0 and self.succeeded == self.requested
+
+    def __bool__(self):
+        return self.ok
+
+
 class BrowserDataImporter:
     """macOS 浏览器数据导入器"""
 
@@ -42,14 +62,14 @@ class BrowserDataImporter:
         """返回 Chromium 使用的 1601-01-01 起算微秒时间戳。"""
         return int((time.time() + 11644473600) * 1_000_000)
     
-    def __init__(self):
+    def __init__(self, exports_dir=None):
         home = os.path.expanduser('~')
         self.browsers = {
             "Chrome": os.path.join(home, "Library/Application Support/Google/Chrome"),
             "Edge": os.path.join(home, "Library/Application Support/Microsoft Edge"),
             "Brave": os.path.join(home, "Library/Application Support/BraveSoftware/Brave-Browser"),
         }
-        self.exports_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports" / "macOS"
+        self.exports_dir = Path(exports_dir) if exports_dir is not None else get_exports_dir()
     
     def get_available_profiles(self, user_data_dir):
         """获取可用的 Profile 列表"""
@@ -62,15 +82,20 @@ class BrowserDataImporter:
                 item_path = os.path.join(user_data_dir, item)
                 if os.path.isdir(item_path) and (item.startswith("Profile") or item == "Default"):
                     profiles.append((item, item_path))
-        except Exception as e:
-            pass
+        except OSError as error:
+            raise RuntimeError(f"无法读取浏览器配置目录 {user_data_dir}: {error}") from error
         
         return sorted(profiles, key=lambda profile: (profile[0] != "Default", profile[0]))
 
     @staticmethod
     def cookie_identity(cookie):
-        """返回 Chromium Cookie 的逻辑唯一键，保留同名不同路径的 Cookie。"""
-        return (cookie.get("host"), cookie.get("name"), cookie.get("path", "/"))
+        """返回 Chromium Cookie 的逻辑唯一键，保留路径和分区差异。"""
+        return (
+            cookie.get("host"), cookie.get("name"), cookie.get("path", "/"),
+            cookie.get("top_frame_site_key", ""),
+            cookie.get("source_scheme", 0), cookie.get("source_port", -1),
+            cookie.get("has_cross_site_ancestor", 0),
+        )
 
     @staticmethod
     def autofill_identity(item):
@@ -86,6 +111,49 @@ class BrowserDataImporter:
             "details", card.get("number"), card.get("name_on_card"),
             card.get("expiration_month"), card.get("expiration_year"),
         )
+
+    @staticmethod
+    def validate_backup_data(data):
+        """验证支持的备份版本、容器类型和敏感记录必填字段。"""
+        version = data.get("format_version", 1)
+        if not isinstance(version, int) or version not in (1, 2):
+            raise ValueError(f"不支持的备份格式版本: {version!r}")
+        browsers = data.get("browsers")
+        if not isinstance(browsers, dict):
+            raise ValueError("browsers 必须是对象")
+
+        requirements = {
+            "cookies": ("host", "name", "value"),
+            "passwords": ("url", "username", "password"),
+            "autofill": ("name", "value"),
+            "credit_cards": ("number",),
+        }
+        for browser_name, browser_data in browsers.items():
+            if not isinstance(browser_name, str) or not isinstance(browser_data, dict):
+                raise ValueError("浏览器条目结构无效")
+            if "profiles" in browser_data:
+                profiles = browser_data["profiles"]
+                if not isinstance(profiles, dict):
+                    raise ValueError(f"{browser_name}.profiles 必须是对象")
+            else:
+                profiles = {"legacy": browser_data}
+            for profile_name, profile_data in profiles.items():
+                if not isinstance(profile_name, str) or not isinstance(profile_data, dict):
+                    raise ValueError(f"{browser_name} 配置文件结构无效")
+                for collection, required_fields in requirements.items():
+                    records = profile_data.get(collection, [])
+                    if not isinstance(records, list):
+                        raise ValueError(
+                            f"{browser_name}/{profile_name}/{collection} 必须是数组"
+                        )
+                    for index, record in enumerate(records):
+                        if not isinstance(record, dict) or not all(
+                            field in record and record[field] is not None
+                            for field in required_fields
+                        ):
+                            raise ValueError(
+                                f"{browser_name}/{profile_name}/{collection}[{index}] 结构无效"
+                            )
     
     def check_browser_running(self, browser_name):
         """检查浏览器是否正在运行"""
@@ -111,7 +179,7 @@ class BrowserDataImporter:
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except Exception:
-            pass
+            return None
         
         return running
     
@@ -147,8 +215,8 @@ class BrowserDataImporter:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 if result.returncode == 0 and result.stdout.strip():
                     return PBKDF2(result.stdout.strip().encode('utf-8'), b'saltysalt', dkLen=16, count=1003)
-            print("⚠️ 未找到 Keychain 密钥，尝试旧版默认密钥 peanuts")
-            return PBKDF2(b"peanuts", b'saltysalt', dkLen=16, count=1003)
+            print(f"❌ 未找到 {browser_name} 的 Keychain Safe Storage 密钥")
+            return None
         except Exception as e:
             print(f"❌ 获取 {browser_name} 主密钥失败: {e}")
             return None
@@ -208,6 +276,27 @@ class BrowserDataImporter:
             return b'v10' + encrypted_data
         except Exception as e:
             return None
+
+    @staticmethod
+    def backup_sqlite_database(database_path):
+        """使用 Online Backup 创建包含 WAL 内容的一致备份。"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = Path(f"{database_path}.backup_{timestamp}")
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(backup_path, flags, 0o600)
+            os.close(descriptor)
+            with closing(sqlite3.connect(sqlite_readonly_uri(database_path), uri=True)) as source:
+                with closing(sqlite3.connect(backup_path)) as destination:
+                    source.backup(destination)
+            backup_path.chmod(0o600)
+            return backup_path
+        except Exception:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
     
     def import_cookies(self, browser_name, browser_path, cookies, master_key):
         """导入 Cookies"""
@@ -217,206 +306,202 @@ class BrowserDataImporter:
         
         if not os.path.exists(cookies_path):
             print(f"   ❌ Cookies 文件不存在")
-            return False
-        
-        # 备份现有 Cookies
-        backup_path = cookies_path + f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            return ImportResult(len(cookies), 0, len(cookies))
+
         try:
-            shutil.copy2(cookies_path, backup_path)
-        except Exception as e:
-            print(f"   ⚠️  备份失败: {e}")
-        
-        success_count = 0
-        insert_count = 0
-        update_count = 0
-        error_count = 0
-        
+            backup_path = self.backup_sqlite_database(cookies_path)
+        except Exception as error:
+            print(f"   ❌ Cookies 备份失败，已中止导入: {error}")
+            return ImportResult(len(cookies), 0, len(cookies))
+
+        succeeded = 0
         try:
-            conn = sqlite3.connect(cookies_path, timeout=30.0)
-            conn.execute("PRAGMA journal_mode=WAL")
-            cursor = conn.cursor()
-            
-            # 确认表结构
-            cursor.execute("PRAGMA table_info(cookies)")
-            cols = [row[1] for row in cursor.fetchall()]
-            expected_cols = [
-                "creation_utc", "host_key", "top_frame_site_key", "name", "value",
-                "encrypted_value", "path", "expires_utc", "is_secure", "is_httponly",
-                "last_access_utc", "has_expires", "is_persistent", "priority",
-                "samesite", "source_scheme", "source_port", "last_update_utc",
-                "source_type", "has_cross_site_ancestor",
-            ]
-            
-            use_dynamic = cols != expected_cols
-            
-            # Chrome 时间戳：自 1601-01-01 起的微秒数
-            def now_chrome_ts():
-                return int((time.time() + 11644473600) * 1_000_000)
-            
-            if not use_dynamic:
-                insert_sql = """
-                INSERT INTO cookies (
-                    creation_utc, host_key, top_frame_site_key, name, value,
-                    encrypted_value, path, expires_utc, is_secure, is_httponly,
-                    last_access_utc, has_expires, is_persistent, priority,
-                    samesite, source_scheme, source_port, last_update_utc,
-                    source_type, has_cross_site_ancestor
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                
-                update_sql = """
-                UPDATE cookies SET
-                    value = ?, encrypted_value = ?, path = ?, expires_utc = ?,
-                    is_secure = ?, is_httponly = ?, last_access_utc = ?,
-                    has_expires = ?, is_persistent = ?, priority = ?,
-                    samesite = ?, source_scheme = ?, source_port = ?,
-                    last_update_utc = ?, source_type = ?, has_cross_site_ancestor = ?
-                WHERE host_key = ? AND name = ? AND path = ?
-                """
-            
-            for idx, cookie in enumerate(cookies):
-                try:
-                    if not isinstance(cookie, dict):
-                        error_count += 1
-                        continue
-                    
-                    required_fields = ["host", "name", "value"]
-                    if not all(field in cookie for field in required_fields):
-                        error_count += 1
-                        continue
-                    
+            with closing(sqlite3.connect(cookies_path, timeout=30.0)) as conn, conn:
+                cursor = conn.cursor()
+                columns = self._table_columns(cursor, "cookies")
+                required_columns = {"host_key", "name", "path", "encrypted_value"}
+                if not required_columns.issubset(columns):
+                    raise RuntimeError("Cookies 数据库结构不受支持")
+
+                for cookie in cookies:
+                    if not isinstance(cookie, dict) or not all(
+                        field in cookie for field in ("host", "name", "value")
+                    ):
+                        raise ValueError("备份中包含无效 Cookie 记录")
                     encrypted_value = self.encrypt_payload(cookie["value"], master_key)
-                    if not encrypted_value:
-                        error_count += 1
-                        continue
-                    
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM cookies WHERE host_key=? AND name=? AND path=?",
-                        (cookie["host"], cookie["name"], cookie.get("path", "/"))
+                    if encrypted_value is None:
+                        raise RuntimeError("Cookie 重新加密失败")
+                    expires = int(cookie.get("expires", 0))
+                    now = self.chrome_timestamp()
+                    values = {
+                        "creation_utc": cookie.get("creation_utc", now),
+                        "host_key": cookie["host"],
+                        "top_frame_site_key": cookie.get("top_frame_site_key", ""),
+                        "name": cookie["name"],
+                        "value": "",
+                        "encrypted_value": encrypted_value,
+                        "path": cookie.get("path", "/"),
+                        "expires_utc": expires,
+                        "is_secure": int(bool(cookie.get("secure", False))),
+                        "is_httponly": int(bool(cookie.get("httponly", False))),
+                        "last_access_utc": cookie.get("last_access_utc", now),
+                        "has_expires": int(cookie.get("has_expires", expires > 0)),
+                        "is_persistent": int(cookie.get("is_persistent", expires > 0)),
+                        "priority": int(cookie.get("priority", 1)),
+                        "samesite": int(cookie.get("samesite", -1)),
+                        "source_scheme": int(cookie.get("source_scheme", 0)),
+                        "source_port": int(cookie.get("source_port", -1)),
+                        "last_update_utc": cookie.get("last_update_utc", now),
+                        "source_type": int(cookie.get("source_type", 0)),
+                        "has_cross_site_ancestor": int(cookie.get("has_cross_site_ancestor", 0)),
+                    }
+                    identity_fields = ["host_key", "name", "path"]
+                    for identity_field in (
+                        "top_frame_site_key", "source_scheme", "source_port",
+                        "has_cross_site_ancestor",
+                    ):
+                        if identity_field in columns:
+                            identity_fields.append(identity_field)
+                    where = " AND ".join(f"{field}=?" for field in identity_fields)
+                    where_values = tuple(values[field] for field in identity_fields)
+                    self._write_record(
+                        cursor, "cookies", columns, values, where, where_values,
+                        immutable_fields=set(identity_fields) | {"creation_utc"},
                     )
-                    exists = cursor.fetchone()[0] > 0
-                    
-                    host = cookie["host"]
-                    name = cookie["name"]
-                    path = cookie.get("path", "/")
-                    expires_utc = int(cookie.get("expires", 0))
-                    
-                    creation_utc = cookie.get("creation_utc", now_chrome_ts())
-                    last_access_utc = cookie.get("last_access_utc", now_chrome_ts())
-                    last_update_utc = cookie.get("last_update_utc", now_chrome_ts())
-                    
-                    is_secure = 1 if cookie.get("secure", False) else 0
-                    is_httponly = 1 if cookie.get("httponly", False) else 0
-                    has_expires = 1 if expires_utc > 0 else 0
-                    is_persistent = has_expires
-                    priority = int(cookie.get("priority", 1))
-                    samesite = int(cookie.get("samesite", -1))
-                    source_scheme = int(cookie.get("source_scheme", 0))
-                    source_port = int(cookie.get("source_port", -1))
-                    source_type = int(cookie.get("source_type", 0))
-                    has_cross = int(cookie.get("has_cross_site_ancestor", 0))
-                    
-                    top_frame_site_key = host
-                    
-                    if exists:
-                        if not use_dynamic:
-                            cursor.execute(
-                                update_sql,
-                                (
-                                    "", encrypted_value, path, expires_utc,
-                                    is_secure, is_httponly, last_access_utc,
-                                    has_expires, is_persistent, priority,
-                                    samesite, source_scheme, source_port,
-                                    last_update_utc, source_type, has_cross,
-                                    host, name, path,
-                                )
-                            )
-                        else:
-                            cursor.execute(
-                                "UPDATE cookies SET encrypted_value=?, expires_utc=?, is_secure=?, is_httponly=?, last_access_utc=? WHERE host_key=? AND name=? AND path=?",
-                                (encrypted_value, expires_utc, is_secure, is_httponly, last_access_utc, host, name, path)
-                            )
-                        update_count += 1
-                    else:
-                        if not use_dynamic:
-                            cursor.execute(
-                                insert_sql,
-                                (
-                                    creation_utc, host, top_frame_site_key, name, "",
-                                    encrypted_value, path, expires_utc, is_secure, is_httponly,
-                                    last_access_utc, has_expires, is_persistent, priority,
-                                    samesite, source_scheme, source_port, last_update_utc,
-                                    source_type, has_cross,
-                                )
-                            )
-                        else:
-                            cursor.execute(
-                                "INSERT INTO cookies (host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly, creation_utc, last_access_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (host, name, encrypted_value, path, expires_utc, is_secure, is_httponly, creation_utc, last_access_utc)
-                            )
-                        insert_count += 1
-                    success_count += 1
-                except Exception as e:
-                    error_count += 1
-                    continue
-            
-            conn.commit()
-            conn.close()
-            
-            total = len(cookies)
-            success_rate = (success_count / total * 100) if total > 0 else 0
-            print(f"   ✅ Cookies: {success_count:,}/{total:,} ({success_rate:.1f}%)")
-            if insert_count > 0 or update_count > 0:
-                print(f"      📝 新增: {insert_count:,} 个 | 🔄 更新: {update_count:,} 个")
-            if error_count > 0:
-                print(f"   ⚠️  失败: {error_count:,} 个")
-            return success_count > 0
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e).lower():
+                    succeeded += 1
+        except sqlite3.OperationalError as error:
+            if "database is locked" in str(error).lower():
                 print(f"❌ {browser_name} Cookies 数据库被锁定")
                 print(f"   请关闭所有浏览器窗口后重试")
             else:
-                print(f"❌ 导入 {browser_name} Cookies 失败: {e}")
-            return False
-        except Exception as e:
-            print(f"❌ 导入 {browser_name} Cookies 失败: {e}")
-            return False
+                print(f"❌ 导入 {browser_name} Cookies 失败: {error}")
+            return ImportResult(len(cookies), 0, len(cookies), str(backup_path))
+        except Exception as error:
+            print(f"❌ 导入 {browser_name} Cookies 失败: {error}")
+            return ImportResult(len(cookies), 0, len(cookies), str(backup_path))
+
+        failed = len(cookies) - succeeded
+        print(f"   {'✅' if failed == 0 else '⚠️ '} Cookies: {succeeded:,}/{len(cookies):,}")
+        return ImportResult(len(cookies), succeeded, failed, str(backup_path))
     
     def import_passwords(self, browser_name, browser_path, passwords, master_key):
         """导入密码"""
         login_data_path = os.path.join(browser_path, "Login Data")
         if not os.path.exists(login_data_path):
             print(f"   ❌ Login Data 文件不存在")
-            return False
+            return ImportResult(len(passwords), 0, len(passwords))
+
+        try:
+            backup_path = self.backup_sqlite_database(login_data_path)
+        except Exception as error:
+            print(f"   ❌ Login Data 备份失败，已中止导入: {error}")
+            return ImportResult(len(passwords), 0, len(passwords))
+
+        succeeded = 0
+        try:
+            from urllib.parse import urlparse
+
+            with closing(sqlite3.connect(login_data_path, timeout=30.0)) as conn, conn:
+                cursor = conn.cursor()
+                columns = self._table_columns(cursor, "logins")
+                required_columns = {"origin_url", "username_value", "password_value"}
+                if not required_columns.issubset(columns):
+                    raise RuntimeError("Login Data 数据库结构不受支持")
+
+                for password in passwords:
+                    if not isinstance(password, dict) or not all(
+                        field in password for field in ("url", "username", "password")
+                    ):
+                        raise ValueError("备份中包含无效密码记录")
+                    encrypted_password = self.encrypt_payload(password["password"], master_key)
+                    if encrypted_password is None:
+                        raise RuntimeError("密码重新加密失败")
+                    url = password["url"]
+                    parsed_url = urlparse(url)
+                    signon_realm = password.get("signon_realm")
+                    if not signon_realm:
+                        signon_realm = (
+                            f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                            if parsed_url.scheme and parsed_url.netloc else url
+                        )
+                    now = self.chrome_timestamp()
+                    values = {
+                        "origin_url": url,
+                        "action_url": password.get("action_url", ""),
+                        "username_value": password["username"],
+                        "password_value": encrypted_password,
+                        "signon_realm": signon_realm,
+                        "date_created": password.get("date_created", now),
+                        "date_last_used": password.get("date_last_used", now),
+                        "date_password_modified": password.get("date_password_modified", now),
+                        "times_used": password.get("times_used", 0),
+                        "blacklisted_by_user": password.get("blacklisted_by_user", 0),
+                        "scheme": password.get("scheme", 0),
+                        "display_name": password.get("display_name", ""),
+                        "icon_url": password.get("icon_url", ""),
+                        "federation_url": password.get("federation_url", ""),
+                        "skip_zero_click": password.get("skip_zero_click", 0),
+                        "generation_upload_status": password.get("generation_upload_status", 0),
+                        "username_element": password.get("username_element", ""),
+                        "password_element": password.get("password_element", ""),
+                    }
+                    identity_fields = ["origin_url", "username_value"]
+                    for identity_field in (
+                        "signon_realm", "username_element", "password_element",
+                    ):
+                        if identity_field in columns:
+                            identity_fields.append(identity_field)
+                    where = " AND ".join(f"{field}=?" for field in identity_fields)
+                    where_values = tuple(values[field] for field in identity_fields)
+                    self._write_record(
+                        cursor, "logins", columns, values, where, where_values,
+                        immutable_fields=set(identity_fields) | {"date_created"},
+                    )
+                    succeeded += 1
+        except sqlite3.OperationalError as error:
+            if "database is locked" in str(error).lower():
+                print(f"❌ {browser_name} 密码数据库被锁定，请关闭浏览器后重试")
+            else:
+                print(f"❌ 导入 {browser_name} 密码失败: {error}")
+            return ImportResult(len(passwords), 0, len(passwords), str(backup_path))
+        except Exception as error:
+            print(f"❌ 导入 {browser_name} 密码失败: {error}")
+            return ImportResult(len(passwords), 0, len(passwords), str(backup_path))
+
+        failed = len(passwords) - succeeded
+        print(f"   {'✅' if failed == 0 else '⚠️ '} 密码: {succeeded:,}/{len(passwords):,}")
+        return ImportResult(len(passwords), succeeded, failed, str(backup_path))
 
     def import_web_data(self, browser_name, browser_path, autofill, credit_cards, master_key):
         """导入自动填充和信用卡，使用目标浏览器密钥重新加密卡号。"""
+        requested = len(autofill) + len(credit_cards)
         web_data_path = os.path.join(browser_path, "Web Data")
         if not os.path.exists(web_data_path):
             print("   ❌ Web Data 文件不存在")
-            return False
+            return ImportResult(requested, 0, requested)
 
         try:
-            shutil.copy2(web_data_path, web_data_path + f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        except Exception as e:
-            print(f"   ⚠️  Web Data 备份失败: {e}")
+            backup_path = self.backup_sqlite_database(web_data_path)
+        except Exception as error:
+            print(f"   ❌ Web Data 备份失败，已中止导入: {error}")
+            return ImportResult(requested, 0, requested)
 
         try:
-            conn = sqlite3.connect(web_data_path, timeout=30.0)
-            conn.execute("PRAGMA journal_mode=WAL")
-            cursor = conn.cursor()
-            success_autofill = self._import_autofill(cursor, autofill)
-            success_cards = self._import_credit_cards(cursor, credit_cards, master_key)
-            conn.commit()
-            conn.close()
+            with closing(sqlite3.connect(web_data_path, timeout=30.0)) as conn, conn:
+                cursor = conn.cursor()
+                success_autofill = self._import_autofill(cursor, autofill)
+                success_cards = self._import_credit_cards(cursor, credit_cards, master_key)
             if autofill:
-                print(f"   ✅ 自动填充: {success_autofill:,}/{len(autofill):,}")
+                marker = "✅" if success_autofill == len(autofill) else "⚠️ "
+                print(f"   {marker} 自动填充: {success_autofill:,}/{len(autofill):,}")
             if credit_cards:
-                print(f"   ✅ 信用卡: {success_cards:,}/{len(credit_cards):,}")
-            return bool(success_autofill or success_cards)
-        except Exception as e:
-            print(f"❌ 导入 {browser_name} 自动填充/信用卡失败: {e}")
-            return False
+                marker = "✅" if success_cards == len(credit_cards) else "⚠️ "
+                print(f"   {marker} 信用卡: {success_cards:,}/{len(credit_cards):,}")
+            succeeded = success_autofill + success_cards
+            return ImportResult(requested, succeeded, requested - succeeded, str(backup_path))
+        except Exception as error:
+            print(f"❌ 导入 {browser_name} 自动填充/信用卡失败: {error}")
+            return ImportResult(requested, 0, requested, str(backup_path))
 
     @staticmethod
     def _table_columns(cursor, table):
@@ -424,69 +509,77 @@ class BrowserDataImporter:
         return {row[1] for row in cursor.fetchall()}
 
     @staticmethod
-    def _write_record(cursor, table, columns, values, where, where_values):
+    def _write_record(
+        cursor, table, columns, values, where, where_values, immutable_fields=None
+    ):
+        immutable_fields = immutable_fields or set()
         fields = [field for field in values if field in columns]
+        if not fields:
+            raise RuntimeError(f"{table} 没有可写入字段")
         cursor.execute(f"SELECT 1 FROM {table} WHERE {where} LIMIT 1", where_values)
         if cursor.fetchone():
-            assignments = ", ".join(f"{field}=?" for field in fields)
-            cursor.execute(f"UPDATE {table} SET {assignments} WHERE {where}", [values[field] for field in fields] + list(where_values))
+            update_fields = [field for field in fields if field not in immutable_fields]
+            if update_fields:
+                assignments = ", ".join(f"{field}=?" for field in update_fields)
+                cursor.execute(
+                    f"UPDATE {table} SET {assignments} WHERE {where}",
+                    [values[field] for field in update_fields] + list(where_values),
+                )
         else:
             placeholders = ", ".join("?" for _ in fields)
             cursor.execute(f"INSERT INTO {table} ({', '.join(fields)}) VALUES ({placeholders})", [values[field] for field in fields])
 
     def _import_autofill(self, cursor, items):
+        if not items:
+            return 0
         columns = self._table_columns(cursor, "autofill")
         if not {"name", "value"}.issubset(columns):
-            return 0
+            raise RuntimeError("autofill 表结构不受支持")
         success = 0
         for item in items:
             if not isinstance(item, dict) or not all(item.get(field) is not None for field in ("name", "value")):
-                continue
-            try:
-                self._write_record(cursor, "autofill", columns, {
-                    "name": item["name"], "value": item["value"],
-                    "date_created": item.get("date_created", self.chrome_timestamp()),
-                    "date_last_used": item.get("date_last_used", self.chrome_timestamp()),
-                    "count": item.get("count", 0),
-                }, "name=? AND value=?", self.autofill_identity(item))
-                success += 1
-            except Exception:
-                continue
+                raise ValueError("备份中包含无效自动填充记录")
+            self._write_record(cursor, "autofill", columns, {
+                "name": item["name"], "value": item["value"],
+                "date_created": item.get("date_created", self.chrome_timestamp()),
+                "date_last_used": item.get("date_last_used", self.chrome_timestamp()),
+                "count": item.get("count", 0),
+            }, "name=? AND value=?", self.autofill_identity(item), {"name", "value"})
+            success += 1
         return success
 
     def _import_credit_cards(self, cursor, cards, master_key):
+        if not cards:
+            return 0
         columns = self._table_columns(cursor, "credit_cards")
         if "card_number_encrypted" not in columns:
-            return 0
+            raise RuntimeError("credit_cards 表结构不受支持")
         success = 0
         for card in cards:
             if not isinstance(card, dict) or not card.get("number"):
-                continue
-            try:
-                encrypted_number = self.encrypt_payload(card["number"], master_key)
-                if not encrypted_number:
-                    continue
-                values = {key: card[key] for key in (
-                    "guid", "name_on_card", "expiration_month", "expiration_year", "date_modified",
-                    "use_count", "use_date", "billing_address_id", "nickname", "card_issuer",
-                    "instrument_id", "virtual_card_enrollment_state", "card_art_url", "product_description",
-                ) if key in card}
-                values["card_number_encrypted"] = encrypted_number
-                if card.get("guid"):
-                    where, where_values = "guid=?", (card["guid"],)
-                else:
-                    where, where_values = self._find_credit_card(cursor, card, master_key)
-                self._write_record(cursor, "credit_cards", columns, values, where, where_values)
-                success += 1
-            except Exception:
-                continue
+                raise ValueError("备份中包含无效信用卡记录")
+            encrypted_number = self.encrypt_payload(card["number"], master_key)
+            if encrypted_number is None:
+                raise RuntimeError("信用卡卡号重新加密失败")
+            values = {key: card[key] for key in (
+                "guid", "name_on_card", "expiration_month", "expiration_year", "date_modified",
+                "use_count", "use_date", "billing_address_id", "nickname", "card_issuer",
+                "instrument_id", "virtual_card_enrollment_state", "card_art_url", "product_description",
+            ) if key in card}
+            values["card_number_encrypted"] = encrypted_number
+            if card.get("guid") and "guid" in columns:
+                where, where_values = "guid=?", (card["guid"],)
+            else:
+                where, where_values = self._find_credit_card(cursor, card, master_key)
+            self._write_record(cursor, "credit_cards", columns, values, where, where_values)
+            success += 1
         return success
 
     def _find_credit_card(self, cursor, card, master_key):
         columns = self._table_columns(cursor, "credit_cards")
         required = {"card_number_encrypted", "name_on_card", "expiration_month", "expiration_year"}
         if not required.issubset(columns):
-            return "guid=?", ("__new_card__",)
+            return "rowid=?", (-1,)
         cursor.execute("SELECT rowid, card_number_encrypted, name_on_card, expiration_month, expiration_year FROM credit_cards")
         for rowid, encrypted, name, month, year in cursor.fetchall():
             if self.credit_card_identity({
@@ -494,121 +587,7 @@ class BrowserDataImporter:
                 "expiration_month": month, "expiration_year": year,
             }) == self.credit_card_identity(card):
                 return "rowid=?", (rowid,)
-        return "guid=?", ("__new_card__",)
-        
-        backup_path = login_data_path + f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        try:
-            shutil.copy2(login_data_path, backup_path)
-        except Exception as e:
-            print(f"   ⚠️  备份失败: {e}")
-        
-        success_count = 0
-        error_count = 0
-        
-        try:
-            conn = sqlite3.connect(login_data_path, timeout=30.0)
-            conn.execute("PRAGMA journal_mode=WAL")
-            cursor = conn.cursor()
-            
-            for idx, pwd in enumerate(passwords):
-                try:
-                    if not isinstance(pwd, dict):
-                        error_count += 1
-                        continue
-                    
-                    required_fields = ["url", "username", "password"]
-                    if not all(field in pwd for field in required_fields):
-                        error_count += 1
-                        continue
-                    
-                    encrypted_password = self.encrypt_payload(pwd["password"], master_key)
-                    if not encrypted_password:
-                        error_count += 1
-                        continue
-                    
-                    from urllib.parse import urlparse
-                    url = pwd["url"]
-                    parsed_url = urlparse(url)
-                    signon_realm = pwd.get("signon_realm")
-                    if not signon_realm:
-                        if parsed_url.scheme and parsed_url.netloc:
-                            signon_realm = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-                        else:
-                            signon_realm = url
-                    
-                    date_created = pwd.get("date_created", self.chrome_timestamp())
-                    date_last_used = pwd.get("date_last_used", self.chrome_timestamp())
-                    date_password_modified = pwd.get("date_password_modified", self.chrome_timestamp())
-                    
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM logins WHERE origin_url=? AND username_value=?",
-                        (url, pwd["username"])
-                    )
-                    exists = cursor.fetchone()[0] > 0
-                    
-                    if exists:
-                        cursor.execute(
-                            "UPDATE logins SET password_value=?, signon_realm=?, date_last_used=? WHERE origin_url=? AND username_value=?",
-                            (encrypted_password, signon_realm, date_last_used, url, pwd["username"])
-                        )
-                    else:
-                        try:
-                            cursor.execute("PRAGMA table_info(logins)")
-                            columns = [row[1] for row in cursor.fetchall()]
-                            
-                            fields = ["origin_url", "username_value", "password_value", "signon_realm"]
-                            values = [url, pwd["username"], encrypted_password, signon_realm]
-                            
-                            optional_fields = {
-                                "date_created": date_created,
-                                "date_last_used": date_last_used,
-                                "date_password_modified": date_password_modified,
-                                "action_url": pwd.get("action_url", ""),
-                                "times_used": pwd.get("times_used", 0),
-                                "blacklisted_by_user": int(pwd.get("blacklisted", False)),
-                                "scheme": pwd.get("scheme", 0),
-                            }
-                            
-                            for field, value in optional_fields.items():
-                                if field in columns:
-                                    fields.append(field)
-                                    values.append(value)
-                            
-                            placeholders = ",".join(["?"] * len(fields))
-                            field_names = ",".join(fields)
-                            cursor.execute(
-                                f"INSERT INTO logins ({field_names}) VALUES ({placeholders})",
-                                values
-                            )
-                        except Exception:
-                            cursor.execute(
-                                "INSERT INTO logins (origin_url, username_value, password_value, signon_realm, date_created, date_last_used) VALUES (?, ?, ?, ?, ?, ?)",
-                                (url, pwd["username"], encrypted_password, signon_realm, date_created, date_last_used)
-                            )
-                    success_count += 1
-                except Exception as e:
-                    error_count += 1
-                    continue
-            
-            conn.commit()
-            conn.close()
-            
-            total = len(passwords)
-            success_rate = (success_count / total * 100) if total > 0 else 0
-            print(f"   ✅ 密码: {success_count:,}/{total:,} ({success_rate:.1f}%)")
-            if error_count > 0:
-                print(f"   ⚠️  失败: {error_count:,} 个")
-            return success_count > 0
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e).lower():
-                print(f"❌ {browser_name} 密码数据库被锁定")
-                print(f"   请关闭所有浏览器窗口后重试")
-            else:
-                print(f"❌ 导入 {browser_name} 密码失败: {e}")
-            return False
-        except Exception as e:
-            print(f"❌ 导入 {browser_name} 密码失败: {e}")
-            return False
+        return "rowid=?", (-1,)
     
     def get_profile_stats(self, browser_name, browser_path):
         """获取 Profile 的数据统计"""
@@ -668,16 +647,28 @@ class BrowserDataImporter:
         
         if not os.path.exists(import_file):
             print(f"❌ 文件不存在: {import_file}")
-            return
+            return False
         
-        with open(import_file, 'r', encoding='utf-8') as f:
-            encrypted_data = json.load(f)
+        try:
+            with open(import_file, 'r', encoding='utf-8') as f:
+                encrypted_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"❌ 读取导入文件失败: {error}")
+            return False
         
         password = "cookies2026"
         print("🔓 正在解密文件...")
         data = self.decrypt_import_data(encrypted_data, password)
         if not data:
-            return
+            return False
+        if not isinstance(data, dict):
+            print("❌ 备份文件顶层结构无效")
+            return False
+        try:
+            self.validate_backup_data(data)
+        except ValueError as error:
+            print(f"❌ 备份文件结构无效: {error}")
+            return False
         
         print(f"\n📄 导出信息：")
         print(f"   📅 导出时间: {data.get('export_time', '未知')}")
@@ -728,23 +719,36 @@ class BrowserDataImporter:
         confirm = input("是否继续导入？(yes/no): ").strip().lower()
         if confirm != 'yes':
             print("❌ 已取消导入")
-            return
+            return True
         print()
         
         imported_profiles = []
+        overall_success = True
+        processed_browser = False
         
         for browser_name, browser_data in data.get("browsers", {}).items():
+            if not isinstance(browser_data, dict):
+                print(f"⏭️  跳过 {browser_name}（数据结构异常）")
+                overall_success = False
+                continue
             if browser_name not in self.browsers:
                 print(f"⏭️  跳过 {browser_name}（不支持）")
+                overall_success = False
                 continue
             
             user_data_dir = self.browsers[browser_name]
             
-            available_profiles = self.get_available_profiles(user_data_dir)
+            try:
+                available_profiles = self.get_available_profiles(user_data_dir)
+            except RuntimeError as error:
+                print(f"\n❌ {error}")
+                overall_success = False
+                continue
             
             if not available_profiles:
                 print(f"\n❌ {browser_name} 未找到可用的配置文件")
                 print(f"   检查路径: {user_data_dir}")
+                overall_success = False
                 continue
             
             print(f"📋 请选择要导入到的 {browser_name} 配置文件：")
@@ -752,7 +756,7 @@ class BrowserDataImporter:
                 try:
                     stats = self.get_profile_stats(browser_name, profile_path)
                     print(f"   {idx}. {profile_name} (当前: 🍪 {stats['cookies']:,} | 🔑 {stats['passwords']:,} | 📝 {stats['autofill']:,} | 💳 {stats['credit_cards']:,})")
-                except:
+                except Exception:
                     print(f"   {idx}. {profile_name}")
             
             try:
@@ -762,12 +766,13 @@ class BrowserDataImporter:
                 if 1 <= choice_num <= len(available_profiles):
                     selected_profile_name, browser_path = available_profiles[choice_num - 1]
                     print(f"   ✅ 已选择: {selected_profile_name}")
-                    imported_profiles.append((browser_name, selected_profile_name, browser_path))
                 else:
                     print(f"   ❌ 无效的选择，跳过 {browser_name}")
+                    overall_success = False
                     continue
             except (ValueError, KeyboardInterrupt):
                 print(f"   ❌ 输入无效，跳过 {browser_name}")
+                overall_success = False
                 continue
             
             print(f"\n{'='*60}")
@@ -776,18 +781,29 @@ class BrowserDataImporter:
             
             # 检查浏览器是否正在运行
             browser_running = self.check_browser_running(browser_name)
+            if browser_running is None:
+                print("⚠️  无法确认浏览器是否已关闭，已中止该浏览器的导入")
+                print("   请安装 psutil 后重试")
+                overall_success = False
+                continue
             if browser_running:
                 print(f"⚠️  检测到 {browser_name} 正在运行")
                 print(f"   ⏭️  跳过 {browser_name}，请完全关闭后重试，以避免数据损坏")
+                overall_success = False
                 continue
             
             master_key = self.get_master_key(browser_name)
             if not master_key:
                 print(f"   ❌ 无法获取主密钥")
+                overall_success = False
                 continue
             
             if "profiles" in browser_data:
                 profiles = browser_data.get("profiles", {})
+                if not isinstance(profiles, dict):
+                    print(f"   ❌ {browser_name} profiles 结构无效")
+                    overall_success = False
+                    continue
                 profile_names = list(profiles.keys())
                 
                 cookies = []
@@ -797,6 +813,8 @@ class BrowserDataImporter:
                 
                 if len(profile_names) == 0:
                     print(f"   ⚠️  导出文件中没有配置文件数据")
+                    overall_success = False
+                    continue
                 elif len(profile_names) == 1:
                     target_profile = profile_names[0]
                     print(f"   ✅ 自动选择: {target_profile}")
@@ -838,11 +856,14 @@ class BrowserDataImporter:
                                     cookies_dict[key] = cookie
                             cookies = list(cookies_dict.values())
                             
-                            # 对 passwords 按 (url, username) 去重
+                            # 密码需保留不同认证域（signon_realm）。
                             passwords_dict = {}
                             for pwd in all_passwords:
                                 if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
-                                    key = (pwd["url"], pwd["username"])
+                                    key = (
+                                        pwd["url"], pwd["username"], pwd.get("signon_realm", ""),
+                                        pwd.get("username_element", ""), pwd.get("password_element", ""),
+                                    )
                                     passwords_dict[key] = pwd
                             passwords = list(passwords_dict.values())
                             
@@ -876,7 +897,10 @@ class BrowserDataImporter:
                             passwords_dict = {}
                             for pwd in all_passwords:
                                 if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
-                                    key = (pwd["url"], pwd["username"])
+                                    key = (
+                                        pwd["url"], pwd["username"], pwd.get("signon_realm", ""),
+                                        pwd.get("username_element", ""), pwd.get("password_element", ""),
+                                    )
                                     passwords_dict[key] = pwd
                             passwords = list(passwords_dict.values())
                     except (ValueError, KeyboardInterrupt):
@@ -899,7 +923,10 @@ class BrowserDataImporter:
                         passwords_dict = {}
                         for pwd in all_passwords:
                             if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
-                                key = (pwd["url"], pwd["username"])
+                                key = (
+                                    pwd["url"], pwd["username"], pwd.get("signon_realm", ""),
+                                    pwd.get("username_element", ""), pwd.get("password_element", ""),
+                                )
                                 passwords_dict[key] = pwd
                         passwords = list(passwords_dict.values())
             else:
@@ -929,20 +956,31 @@ class BrowserDataImporter:
             print(f"   📝 自动填充: {len(autofill):,} 项")
             print(f"   💳 信用卡: {len(credit_cards):,} 张")
             
+            results = []
             if cookies:
-                self.import_cookies(browser_name, browser_path, cookies, master_key)
+                results.append(self.import_cookies(browser_name, browser_path, cookies, master_key))
             else:
                 print(f"   ⏭️  没有 Cookies 数据需要导入")
             
             if passwords:
-                self.import_passwords(browser_name, browser_path, passwords, master_key)
+                results.append(self.import_passwords(browser_name, browser_path, passwords, master_key))
             else:
                 print(f"   ⏭️  没有密码数据需要导入")
 
             if autofill or credit_cards:
-                self.import_web_data(browser_name, browser_path, autofill, credit_cards, master_key)
+                results.append(self.import_web_data(browser_name, browser_path, autofill, credit_cards, master_key))
             else:
                 print(f"   ⏭️  没有自动填充或信用卡数据需要导入")
+
+            processed_browser = True
+            profile_success = bool(results) and all(result.ok for result in results)
+            if profile_success:
+                imported_profiles.append((browser_name, selected_profile_name, browser_path))
+            else:
+                overall_success = False
+                failed = sum(result.failed for result in results)
+                requested = sum(result.requested for result in results)
+                print(f"   ❌ {browser_name} 导入不完整: 失败 {failed:,}/{requested:,}")
         
         if imported_profiles:
             print("\n" + "="*60)
@@ -958,73 +996,75 @@ class BrowserDataImporter:
                     print(f"    💳 信用卡: {stats['credit_cards']:,} 张")
         
         print("\n" + "="*60)
-        print("✅ 导入完成")
+        if overall_success and processed_browser:
+            print("✅ 导入完成，所有请求的数据均已写入")
+        else:
+            print("❌ 导入完成，但存在失败或跳过的数据")
         print("="*60)
         print("\n💡 重要提醒：")
         print("  1. 请重启浏览器以应用更改")
         print("  2. 检查导入的数据是否正确")
         print("  3. 建议删除导入文件以保护隐私")
         print("="*60)
+        return overall_success and processed_browser
 
 
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='macOS 浏览器数据导入工具')
-    parser.add_argument('-f', '--file', type=str, help='直接指定要导入的文件路径')
-    parser.add_argument('-n', '--number', type=int, help='通过文件编号选择文件（运行时不带参数可查看编号）')
-    parser.add_argument('-l', '--list', action='store_true', help='仅列出可用的导出文件')
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('-f', '--file', type=str, help='直接指定要导入的文件路径')
+    selection.add_argument('-n', '--number', type=int, help='通过文件编号选择文件（运行时不带参数可查看编号）')
+    selection.add_argument('-l', '--list', action='store_true', help='仅列出可用的导出文件')
     args = parser.parse_args()
     
     importer = BrowserDataImporter()
-    
-    exports_dir = importer.exports_dir
-    if not exports_dir.exists():
-        print("❌ 未找到导出目录")
-        return
-    
-    export_files = list(exports_dir.glob("*.encrypted"))
-    if not export_files:
-        print("❌ 未找到导出文件")
-        return
-    
-    export_files.sort(key=lambda x: x.name)
-    
-    print("\n📁 可用的导出文件：")
-    for i, file in enumerate(export_files, 1):
-        file_size = file.stat().st_size / 1024 / 1024
-        print(f"  {i}. {file.name} ({file_size:.2f} MB)")
-    
-    if args.list:
-        return
-    
     import_file = None
-    
+
     if args.file:
-        import_file = Path(args.file)
-        if not import_file.exists():
+        import_file = Path(args.file).expanduser()
+        if not import_file.is_file():
             print(f"❌ 文件不存在: {import_file}")
-            return
-    elif args.number:
+            return 1
+    else:
+        exports_dir = importer.exports_dir
+        if not exports_dir.exists():
+            print(f"❌ 未找到导出目录: {exports_dir}")
+            return 1
+
+        export_files = sorted(exports_dir.glob("*.encrypted"), key=lambda path: path.name)
+        if not export_files:
+            print(f"❌ 未找到导出文件: {exports_dir}")
+            return 1
+
+        print("\n📁 可用的导出文件：")
+        for index, file in enumerate(export_files, 1):
+            file_size = file.stat().st_size / 1024 / 1024
+            print(f"  {index}. {file.name} ({file_size:.2f} MB)")
+
+        if args.list:
+            return 0
+
+    if args.number is not None:
         if 1 <= args.number <= len(export_files):
             import_file = export_files[args.number - 1]
         else:
             print(f"❌ 无效的文件编号，请选择 1-{len(export_files)} 之间的数字")
-            return
-    else:
+            return 1
+    elif not args.file:
         try:
             choice = int(input("\n请选择要导入的文件编号: "))
             if 1 <= choice <= len(export_files):
                 import_file = export_files[choice - 1]
             else:
                 print(f"❌ 无效的选择，请选择 1-{len(export_files)} 之间的数字")
-                return
-        except ValueError:
+                return 1
+        except (ValueError, KeyboardInterrupt):
             print("❌ 无效的输入")
-            return
-    
-    if import_file:
-        importer.import_all(import_file)
+            return 1
+
+    return 0 if importer.import_all(import_file) else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

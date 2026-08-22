@@ -13,9 +13,13 @@ import json
 import base64
 import sqlite3
 import shutil
+import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 import getpass
+
+from browser_utils import default_exports_dir, safe_print as print
 
 try:
     from win32crypt import CryptUnprotectData
@@ -35,14 +39,19 @@ except ImportError:
 class BrowserDataExporter:
     """浏览器数据导出器"""
     
-    def __init__(self):
+    def __init__(self, output_dir=None):
         self.browsers = {
             "Chrome": os.path.join(os.environ['LOCALAPPDATA'], "Google", "Chrome", "User Data"),
             "Edge": os.path.join(os.environ['LOCALAPPDATA'], "Microsoft", "Edge", "User Data"),
             "Brave": os.path.join(os.environ['LOCALAPPDATA'], "BraveSoftware", "Brave-Browser", "User Data"),
         }
-        self.output_dir = Path(__file__).resolve().parents[3] / "BACKUP" / "浏览器数据" / "exports" / "wins"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = Path(output_dir) if output_dir else default_exports_dir(__file__)
+        self.v20_skipped = 0
+        self.export_errors = []
+
+    def _record_export_error(self, message):
+        self.export_errors.append(message)
+        print(f"   ⚠️ {message}")
     
     def get_available_profiles(self, user_data_dir):
         """获取可用的 Profile 列表"""
@@ -55,8 +64,8 @@ class BrowserDataExporter:
                 item_path = os.path.join(user_data_dir, item)
                 if os.path.isdir(item_path) and (item.startswith("Profile") or item == "Default"):
                     profiles.append((item, item_path))
-        except Exception as e:
-            pass
+        except OSError as e:
+            print(f"⚠️ 无法枚举配置文件 {user_data_dir}: {e}")
         
         return sorted(profiles, key=lambda profile: (profile[0] != "Default", profile[0]))
 
@@ -115,7 +124,7 @@ class BrowserDataExporter:
                 return cipher.decrypt_and_verify(ciphertext, tag).decode("utf-8")
 
             if prefix == b"v20":
-                print("⚠️ 检测到 v20/App-Bound Encryption，当前环境无法直接解密该字段")
+                self.v20_skipped += 1
                 return None
 
             decrypted = CryptUnprotectData(bytes(cipher_text), None, None, None, 0)[1]
@@ -152,24 +161,39 @@ class BrowserDataExporter:
                 return False
         return False
     
-    def sqlite_online_backup(self, source_db, dest_db):
+    def sqlite_online_backup(self, source_db, dest_db, timeout_seconds=15):
         """使用 SQLite Online Backup 复制数据库"""
+        source_conn = None
+        dest_conn = None
         try:
-            # 打开源数据库（只读模式）
-            source_conn = sqlite3.connect(f"file:{source_db}?mode=ro", uri=True)
-            # 创建目标数据库
+            source_conn = sqlite3.connect(
+                f"file:{Path(source_db).resolve().as_posix()}?mode=ro", uri=True, timeout=1.0
+            )
             dest_conn = sqlite3.connect(dest_db)
-            
-            # 使用 backup API
-            source_conn.backup(dest_conn)
-            
-            source_conn.close()
-            dest_conn.close()
+            deadline = time.monotonic() + timeout_seconds
+
+            def check_deadline(status, remaining, total):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"SQLite 在线备份超过 {timeout_seconds} 秒")
+
+            source_conn.backup(
+                dest_conn, pages=256, progress=check_deadline, sleep=0.05
+            )
             print("✅ 使用在线备份成功")
             return True
         except Exception as e:
             print(f"❌ 在线备份失败: {e}")
             return False
+        finally:
+            if dest_conn is not None:
+                dest_conn.close()
+            if source_conn is not None:
+                source_conn.close()
+
+    @staticmethod
+    def _table_columns(cursor, table):
+        cursor.execute(f"PRAGMA table_info({table})")
+        return {row[1] for row in cursor.fetchall()}
     
     def export_cookies(self, browser_name, profile_name, browser_path, master_key):
         """导出 Cookies（支持浏览器运行时）"""
@@ -183,39 +207,50 @@ class BrowserDataExporter:
         # 使用安全复制方法（支持浏览器运行时）
         temp_cookies = os.path.join(self.output_dir, f"temp_{browser_name}_{profile_name}_cookies.db")
         if not self.safe_copy_locked_file(cookies_path, temp_cookies):
+            self._record_export_error(f"无法复制 {browser_name}/{profile_name} Cookies 数据库")
             return []
         
         cookies = []
         try:
-            conn = sqlite3.connect(temp_cookies)
-            cursor = conn.cursor()
-            cursor.execute("SELECT host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly FROM cookies")
-            
-            for row in cursor.fetchall():
-                host, name, encrypted_value, path, expires, is_secure, is_httponly = row
-                
-                # 解密 cookie 值
-                decrypted_value = self.decrypt_payload(encrypted_value, master_key)
-                if decrypted_value:
-                    cookies.append({
-                        "host": host,
-                        "name": name,
+            with sqlite3.connect(temp_cookies) as conn:
+                cursor = conn.cursor()
+                columns = self._table_columns(cursor, "cookies")
+                fields = [field for field in (
+                    "creation_utc", "host_key", "top_frame_site_key", "name",
+                    "encrypted_value", "path", "expires_utc", "is_secure",
+                    "is_httponly", "last_access_utc", "has_expires",
+                    "is_persistent", "priority", "samesite", "source_scheme",
+                    "source_port", "last_update_utc", "source_type",
+                    "has_cross_site_ancestor",
+                ) if field in columns]
+                required = {"host_key", "name", "encrypted_value", "path"}
+                if not required.issubset(fields):
+                    raise ValueError("Cookies 表缺少必要字段")
+                cursor.execute(f"SELECT {','.join(fields)} FROM cookies")
+                for row in cursor.fetchall():
+                    record = dict(zip(fields, row))
+                    decrypted_value = self.decrypt_payload(record.pop("encrypted_value"), master_key)
+                    if decrypted_value is None:
+                        continue
+                    cookie = {
+                        "host": record.pop("host_key"),
+                        "name": record.pop("name"),
                         "value": decrypted_value,
-                        "path": path,
-                        "expires": expires,
-                        "secure": bool(is_secure),
-                        "httponly": bool(is_httponly)
-                    })
-            
-            conn.close()
+                        "path": record.pop("path"),
+                        "expires": record.pop("expires_utc", 0),
+                        "secure": bool(record.pop("is_secure", 0)),
+                        "httponly": bool(record.pop("is_httponly", 0)),
+                    }
+                    cookie.update(record)
+                    cookies.append(cookie)
         except Exception as e:
-            pass
+            self._record_export_error(f"读取 {browser_name}/{profile_name} Cookies 失败: {e}")
         finally:
             # 清理临时文件
             if os.path.exists(temp_cookies):
                 try:
                     os.remove(temp_cookies)
-                except:
+                except OSError:
                     pass
         
         return cookies
@@ -229,35 +264,46 @@ class BrowserDataExporter:
         # 使用安全复制方法（支持浏览器运行时）
         temp_login = os.path.join(self.output_dir, f"temp_{browser_name}_{profile_name}_login.db")
         if not self.safe_copy_locked_file(login_data_path, temp_login):
+            self._record_export_error(f"无法复制 {browser_name}/{profile_name} Login Data 数据库")
             return []
         
         passwords = []
         try:
-            conn = sqlite3.connect(temp_login)
-            cursor = conn.cursor()
-            cursor.execute("SELECT origin_url, username_value, password_value FROM logins")
-            
-            for row in cursor.fetchall():
-                url, username, encrypted_password = row
-                
-                # 解密密码
-                decrypted_password = self.decrypt_payload(encrypted_password, master_key)
-                if decrypted_password:
-                    passwords.append({
-                        "url": url,
-                        "username": username,
-                        "password": decrypted_password
-                    })
-            
-            conn.close()
+            with sqlite3.connect(temp_login) as conn:
+                cursor = conn.cursor()
+                columns = self._table_columns(cursor, "logins")
+                fields = [field for field in (
+                    "origin_url", "action_url", "username_element", "username_value",
+                    "password_element", "password_value", "submit_element",
+                    "signon_realm", "date_created", "blacklisted_by_user", "scheme",
+                    "password_type", "times_used", "display_name", "icon_url",
+                    "federation_url", "skip_zero_click", "generation_upload_status",
+                    "date_last_used", "moving_blocked_for", "date_password_modified",
+                ) if field in columns]
+                required = {"origin_url", "username_value", "password_value"}
+                if not required.issubset(fields):
+                    raise ValueError("Login Data 表缺少必要字段")
+                cursor.execute(f"SELECT {','.join(fields)} FROM logins")
+                for row in cursor.fetchall():
+                    record = dict(zip(fields, row))
+                    decrypted_password = self.decrypt_payload(record.pop("password_value"), master_key)
+                    if decrypted_password is None:
+                        continue
+                    password = {
+                        "url": record.pop("origin_url"),
+                        "username": record.pop("username_value"),
+                        "password": decrypted_password,
+                    }
+                    password.update(record)
+                    passwords.append(password)
         except Exception as e:
-            pass
+            self._record_export_error(f"读取 {browser_name}/{profile_name} 密码失败: {e}")
         finally:
             # 清理临时文件
             if os.path.exists(temp_login):
                 try:
                     os.remove(temp_login)
-                except:
+                except OSError:
                     pass
         
         return passwords
@@ -269,6 +315,7 @@ class BrowserDataExporter:
             return [], []
         temp_web_data = os.path.join(self.output_dir, f"temp_{browser_name}_{profile_name}_web_data.db")
         if not self.safe_copy_locked_file(web_data_path, temp_web_data):
+            self._record_export_error(f"无法复制 {browser_name}/{profile_name} Web Data 数据库")
             return [], []
 
         autofill, credit_cards = [], []
@@ -303,8 +350,8 @@ class BrowserDataExporter:
                             card["number"] = number
                             credit_cards.append(card)
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            self._record_export_error(f"读取 {browser_name}/{profile_name} Web Data 失败: {e}")
         finally:
             if os.path.exists(temp_web_data):
                 try:
@@ -359,6 +406,12 @@ class BrowserDataExporter:
     
     def export_all(self):
         """导出所有浏览器数据"""
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(f"❌ 无法创建导出目录 {self.output_dir}: {exc}")
+            return False
+
         print("\n" + "="*60)
         print("🔐 浏览器数据导出工具")
         print("="*60)
@@ -369,7 +422,8 @@ class BrowserDataExporter:
         all_data = {
             "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "username": getpass.getuser(),
-            "browsers": {}
+            "browsers": {},
+            "partial_export": False,
         }
         
         for browser_name, user_data_dir in self.browsers.items():
@@ -413,6 +467,8 @@ class BrowserDataExporter:
             master_key = self.get_master_key(first_profile_path)
             if not master_key:
                 print(f"   ❌ 无法获取 {browser_name} 主密钥")
+                all_data["partial_export"] = True
+                all_data.setdefault("warnings", []).append(f"无法获取 {browser_name} 主密钥")
                 continue
             
             # 导出每个选中的 Profile 数据
@@ -424,18 +480,30 @@ class BrowserDataExporter:
             
             for profile_name, profile_path in selected_profiles:
                 print(f"\n   📋 导出 {profile_name}...")
-                
+                v20_before = self.v20_skipped
+                errors_before = len(self.export_errors)
                 cookies = self.export_cookies(browser_name, profile_name, profile_path, master_key)
                 passwords = self.export_passwords(browser_name, profile_name, profile_path, master_key)
                 autofill, credit_cards = self.export_web_data(browser_name, profile_name, profile_path, master_key)
-                
-                if cookies or passwords or autofill or credit_cards:
-                    browser_profiles[profile_name] = {
+                v20_count = self.v20_skipped - v20_before
+                read_errors = self.export_errors[errors_before:]
+
+                if cookies or passwords or autofill or credit_cards or v20_count or read_errors:
+                    profile_payload = {
                         "cookies": cookies,
                         "passwords": passwords,
                         "autofill": autofill,
                         "credit_cards": credit_cards,
                     }
+                    if v20_count:
+                        profile_payload.setdefault("warnings", {})["v20_app_bound_fields_skipped"] = v20_count
+                        all_data["partial_export"] = True
+                        print(f"      ⚠️ {v20_count:,} 个 v20/App-Bound 字段无法导出；该备份不完整")
+                    if read_errors:
+                        profile_payload.setdefault("warnings", {})["read_errors"] = read_errors
+                        all_data["partial_export"] = True
+                        print(f"      ⚠️ {len(read_errors):,} 个数据库读取步骤失败；该备份不完整")
+                    browser_profiles[profile_name] = profile_payload
                     total_cookies += len(cookies)
                     total_passwords += len(passwords)
                     total_autofill += len(autofill)
@@ -453,7 +521,7 @@ class BrowserDataExporter:
             print("\n" + "="*60)
             print("⚠️  没有可导出的数据")
             print("="*60)
-            return
+            return False
         
         # 加密保存
         print("\n" + "-"*60)
@@ -473,7 +541,10 @@ class BrowserDataExporter:
             json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
         
         print("\n" + "="*60)
-        print("✅ 导出成功！")
+        if all_data["partial_export"]:
+            print("⚠️ 导出文件已生成，但内容不完整")
+        else:
+            print("✅ 导出成功！")
         print(f"📁 文件位置: {output_file}")
         print(f"🔒 文件已加密，需要密码才能解密")
         print("\n⚠️  重要提醒：")
@@ -481,12 +552,20 @@ class BrowserDataExporter:
         print("  2. 不要将此文件上传到公共网络")
         print("  3. 使用完毕后建议删除明文数据")
         print("="*60)
+        if all_data["partial_export"]:
+            print("⚠️ 导出文件已生成，但部分 App-Bound 字段未包含；请勿将其视为完整备份")
+            return False
+        return True
 
 
 def main():
     """主函数"""
-    exporter = BrowserDataExporter()
-    exporter.export_all()
+    parser = argparse.ArgumentParser(description="浏览器数据导出工具")
+    parser.add_argument("-o", "--output-dir", help="导出文件目录")
+    args = parser.parse_args()
+    exporter = BrowserDataExporter(args.output_dir)
+    if not exporter.export_all():
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
