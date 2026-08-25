@@ -18,7 +18,6 @@ from datetime import datetime
 from pathlib import Path
 
 from browser_utils import (
-    default_exports_dir,
     load_encrypted_file,
     safe_print as print,
     validate_decrypted_data,
@@ -53,13 +52,12 @@ class BrowserDataImporter:
         import time
         return int((time.time() + 11644473600) * 1_000_000)
     
-    def __init__(self, exports_dir=None):
+    def __init__(self):
         self.browsers = {
             "Chrome": os.path.join(os.environ['LOCALAPPDATA'], "Google", "Chrome", "User Data"),
             "Edge": os.path.join(os.environ['LOCALAPPDATA'], "Microsoft", "Edge", "User Data"),
             "Brave": os.path.join(os.environ['LOCALAPPDATA'], "BraveSoftware", "Brave-Browser", "User Data"),
         }
-        self.exports_dir = Path(exports_dir) if exports_dir else default_exports_dir(__file__)
     
     def get_available_profiles(self, user_data_dir):
         """获取可用的 Profile 列表"""
@@ -166,7 +164,7 @@ class BrowserDataImporter:
             if encrypted_key.startswith(b"DPAPI"):
                 protected_key = encrypted_key[5:]
             elif encrypted_key.startswith(b"APPB"):
-                print("❌ 当前 Chrome 使用 APPB（App-Bound Encryption），此导入器无法直接解密")
+                print("ℹ️ 目标浏览器使用 APPB，将改用当前 Windows 用户的 DPAPI 写入")
                 return None
             else:
                 print("❌ 不支持的 Windows 浏览器主密钥格式")
@@ -206,19 +204,65 @@ class BrowserDataImporter:
             return None
 
     def encrypt_payload(self, plain_text, master_key):
-        """加密数据"""
+        """Encrypt a field for Chromium, falling back to user-bound DPAPI."""
         try:
-            # 使用 AES GCM 模式加密（v10+）
-            from Crypto.Random import get_random_bytes
-            iv = get_random_bytes(12)
-            cipher = AES.new(master_key, AES.MODE_GCM, iv)
-            encrypted_data, tag = cipher.encrypt_and_digest(plain_text.encode('utf-8'))
-            
-            # 组合加密数据：v10 + iv + encrypted_data + tag
-            return b'v10' + iv + encrypted_data + tag
+            plain_bytes = plain_text.encode("utf-8")
+            if master_key:
+                from Crypto.Random import get_random_bytes
+                iv = get_random_bytes(12)
+                cipher = AES.new(master_key, AES.MODE_GCM, iv)
+                encrypted_data, tag = cipher.encrypt_and_digest(plain_bytes)
+                return b"v10" + iv + encrypted_data + tag
+
+            # Chromium can read legacy DPAPI blobs even when Local State uses
+            # APPB and does not expose an AES key to this process.
+            return CryptProtectData(plain_bytes, None, None, None, None, 0)
         except Exception as e:
             print(f"❌ 加密失败: {e}")
             return None
+
+    @staticmethod
+    def _has_only_encrypted_value(item, plain_field, encrypted_field):
+        return (
+            isinstance(item, dict)
+            and item.get(plain_field) is None
+            and isinstance(item.get(encrypted_field), str)
+            and bool(item[encrypted_field])
+        )
+
+    def select_profile_sources(self, profiles):
+        """Return selected profile payloads, or None for invalid input."""
+        profile_names = list(profiles)
+        if not profile_names:
+            return None
+        if len(profile_names) == 1:
+            profile_name = profile_names[0]
+            print(f"   ✅ 自动选择: {profile_name}")
+            return [profiles[profile_name]]
+
+        print(f"   📁 导出文件中有 {len(profile_names)} 个配置文件的数据")
+        print("   请选择要导入的配置文件数据：")
+        print("   0. 合并所有配置文件的数据")
+        for idx, profile_name in enumerate(profile_names, 1):
+            profile_data = profiles[profile_name]
+            cookies_count = len(profile_data.get("cookies", [])) if isinstance(profile_data, dict) else 0
+            passwords_count = len(profile_data.get("passwords", [])) if isinstance(profile_data, dict) else 0
+            print(f"   {idx}. {profile_name} (🍪 {cookies_count:,} | 🔑 {passwords_count:,})")
+
+        try:
+            choice = int(input(f"\n   请输入选择 (0-{len(profile_names)}): ").strip())
+        except (ValueError, KeyboardInterrupt, EOFError):
+            print("   ❌ 输入无效，已取消该浏览器的导入")
+            return None
+        if choice == 0:
+            print("   🔄 合并所有配置文件的数据...")
+            return [profiles[name] for name in profile_names]
+        if 1 <= choice <= len(profile_names):
+            profile_name = profile_names[choice - 1]
+            print(f"   ✅ 选择配置文件: {profile_name}")
+            return [profiles[profile_name]]
+        print("   ❌ 选择超出范围，已取消该浏览器的导入")
+        return None
     
     @staticmethod
     def _table_info(cursor, table):
@@ -305,6 +349,7 @@ class BrowserDataImporter:
         conn = None
         errors = []
         error_count = 0
+        skipped = 0
         inserted = 0
         updated = 0
         try:
@@ -328,6 +373,11 @@ class BrowserDataImporter:
 
             for index, cookie in enumerate(cookies, 1):
                 try:
+                    if self._has_only_encrypted_value(
+                        cookie, "value", "encrypted_value"
+                    ):
+                        skipped += 1
+                        continue
                     if not isinstance(cookie, dict) or not all(
                         field in cookie for field in ("host", "name", "value")
                     ):
@@ -376,9 +426,12 @@ class BrowserDataImporter:
                     print(f"   - {detail}")
                 return False
             conn.commit()
-            print(f"   ✅ Cookies: {len(cookies):,}/{len(cookies):,}")
+            imported = len(cookies) - skipped
+            print(f"   ✅ Cookies: {imported:,}/{len(cookies):,}")
             print(f"      📝 新增: {inserted:,} 个 | 🔄 更新: {updated:,} 个")
-            return True
+            if skipped:
+                print(f"      ⚠️ 跳过 {skipped:,} 个仅含源端密文、无法安全迁移的 Cookie")
+            return skipped == 0
         except Exception as exc:
             if conn is not None:
                 conn.rollback()
@@ -401,6 +454,7 @@ class BrowserDataImporter:
         conn = None
         errors = []
         error_count = 0
+        skipped = 0
         try:
             conn = sqlite3.connect(login_data_path, timeout=30.0)
             conn.execute("BEGIN IMMEDIATE")
@@ -412,6 +466,11 @@ class BrowserDataImporter:
 
             for idx, pwd in enumerate(passwords, 1):
                 try:
+                    if self._has_only_encrypted_value(
+                        pwd, "password", "encrypted_password"
+                    ):
+                        skipped += 1
+                        continue
                     if not isinstance(pwd, dict) or not all(
                         field in pwd for field in ("url", "username", "password")
                     ):
@@ -494,8 +553,11 @@ class BrowserDataImporter:
                     print(f"   - {detail}")
                 return False
             conn.commit()
-            print(f"   ✅ 密码: {len(passwords):,}/{len(passwords):,}")
-            return True
+            imported = len(passwords) - skipped
+            print(f"   ✅ 密码: {imported:,}/{len(passwords):,}")
+            if skipped:
+                print(f"      ⚠️ 跳过 {skipped:,} 个仅含源端密文、无法安全迁移的密码")
+            return skipped == 0
         except Exception as e:
             if conn is not None:
                 conn.rollback()
@@ -520,7 +582,9 @@ class BrowserDataImporter:
             conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             success_autofill, autofill_errors = self._import_autofill(cursor, autofill)
-            success_cards, card_errors = self._import_credit_cards(cursor, credit_cards, master_key)
+            success_cards, card_errors, skipped_cards = self._import_credit_cards(
+                cursor, credit_cards, master_key
+            )
             if autofill_errors or card_errors:
                 conn.rollback()
                 print(
@@ -533,7 +597,9 @@ class BrowserDataImporter:
                 print(f"   ✅ 自动填充: {success_autofill:,}/{len(autofill):,}")
             if credit_cards:
                 print(f"   ✅ 信用卡: {success_cards:,}/{len(credit_cards):,}")
-            return bool(success_autofill or success_cards)
+            if skipped_cards:
+                print(f"      ⚠️ 跳过 {skipped_cards:,} 张仅含源端密文、无法安全迁移的信用卡")
+            return bool(success_autofill or success_cards) and not skipped_cards
         except Exception as e:
             if conn is not None:
                 conn.rollback()
@@ -584,10 +650,16 @@ class BrowserDataImporter:
     def _import_credit_cards(self, cursor, cards, master_key):
         columns = self._table_columns(cursor, "credit_cards")
         if "card_number_encrypted" not in columns:
-            return 0, len(cards)
+            return 0, len(cards), 0
         success = 0
         errors = 0
+        skipped = 0
         for card in cards:
+            if self._has_only_encrypted_value(
+                card, "number", "encrypted_card_number"
+            ):
+                skipped += 1
+                continue
             if not isinstance(card, dict) or not card.get("number"):
                 errors += 1
                 continue
@@ -610,7 +682,7 @@ class BrowserDataImporter:
             except Exception:
                 errors += 1
                 continue
-        return success, errors
+        return success, errors, skipped
 
     def _find_credit_card(self, cursor, card, master_key):
         columns = self._table_columns(cursor, "credit_cards")
@@ -839,152 +911,42 @@ class BrowserDataImporter:
             # 获取主密钥
             master_key = self.get_master_key(browser_path)
             if not master_key:
-                print(f"   ❌ 无法获取主密钥")
-                overall_success = False
-                continue
+                print("   ℹ️ 未取得 AES 主密钥，将使用当前 Windows 用户的 DPAPI 写入")
             
-            # 检查数据结构：新格式（使用 profiles）还是旧格式
             if "profiles" in browser_data:
-                # 新格式：从 profiles 中提取数据
-                profiles = browser_data.get("profiles", {})
-                profile_names = list(profiles.keys())
-                
-                # 初始化 cookies 和 passwords
-                cookies = []
-                passwords = []
-                selected_profile_data = None
-                merge_profiles = False
-                
-                if len(profile_names) == 0:
-                    print(f"   ⚠️  导出文件中没有配置文件数据")
+                profile_data_sources = self.select_profile_sources(
+                    browser_data.get("profiles", {})
+                )
+                if profile_data_sources is None:
+                    print("   ⏭️ 已跳过该浏览器")
                     overall_success = False
                     continue
-                elif len(profile_names) == 1:
-                    # 只有一个 profile，自动使用它
-                    target_profile = profile_names[0]
-                    print(f"   ✅ 自动选择: {target_profile}")
-                    profile_data = profiles[target_profile]
-                    if isinstance(profile_data, dict):
-                        cookies = profile_data.get("cookies", [])
-                        passwords = profile_data.get("passwords", [])
-                        selected_profile_data = profile_data
-                else:
-                    # 多个 profiles，让用户选择
-                    print(f"   📁 导出文件中有 {len(profile_names)} 个配置文件的数据")
-                    print(f"   请选择要导入的配置文件数据：")
-                    print(f"   0. 合并所有配置文件的数据")
-                    for idx, profile_name in enumerate(profile_names, 1):
-                        profile_data = profiles[profile_name]
-                        cookies_count = len(profile_data.get("cookies", [])) if isinstance(profile_data, dict) else 0
-                        passwords_count = len(profile_data.get("passwords", [])) if isinstance(profile_data, dict) else 0
-                        print(f"   {idx}. {profile_name} (🍪 {cookies_count:,} | 🔑 {passwords_count:,})")
-                    
-                    try:
-                        choice = input(f"\n   请输入选择 (0-{len(profile_names)}): ").strip()
-                        choice_num = int(choice)
-                        
-                        if choice_num == 0:
-                            print(f"   🔄 合并所有配置文件的数据...")
-                            merge_profiles = True
-                            # 合并时收集所有数据
-                            all_cookies = []
-                            all_passwords = []
-                            for profile_name, profile_data in profiles.items():
-                                if isinstance(profile_data, dict):
-                                    all_cookies.extend(profile_data.get("cookies", []))
-                                    all_passwords.extend(profile_data.get("passwords", []))
-                            
-                            # 去重：对于 cookies，使用 (host, name) 作为唯一键，保留最后一个
-                            cookies_dict = {}
-                            for cookie in all_cookies:
-                                if isinstance(cookie, dict) and "host" in cookie and "name" in cookie:
-                                    key = self.cookie_identity(cookie)
-                                    cookies_dict[key] = cookie
-                            cookies = list(cookies_dict.values())
-                            
-                            # 去重：对于 passwords，使用 (url, username) 作为唯一键，保留最后一个
-                            passwords_dict = {}
-                            for pwd in all_passwords:
-                                if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
-                                    key = (pwd["url"], pwd["username"])
-                                    passwords_dict[key] = pwd
-                            passwords = list(passwords_dict.values())
-                            
-                            if len(all_cookies) != len(cookies) or len(all_passwords) != len(passwords):
-                                print(f"   ℹ️  去重后: 🍪 {len(cookies):,} 个 (合并前 {len(all_cookies):,} 个) | 🔑 {len(passwords):,} 个 (合并前 {len(all_passwords):,} 个)")
-                        elif 1 <= choice_num <= len(profile_names):
-                            target_profile = profile_names[choice_num - 1]
-                            print(f"   ✅ 选择配置文件: {target_profile}")
-                            profile_data = profiles[target_profile]
-                            if isinstance(profile_data, dict):
-                                cookies = profile_data.get("cookies", [])
-                                passwords = profile_data.get("passwords", [])
-                                selected_profile_data = profile_data
-                        else:
-                            print(f"   ❌ 无效的选择，将合并所有数据")
-                            merge_profiles = True
-                            all_cookies = []
-                            all_passwords = []
-                            for profile_name, profile_data in profiles.items():
-                                if isinstance(profile_data, dict):
-                                    all_cookies.extend(profile_data.get("cookies", []))
-                                    all_passwords.extend(profile_data.get("passwords", []))
-                            
-                            cookies_dict = {}
-                            for cookie in all_cookies:
-                                if isinstance(cookie, dict) and "host" in cookie and "name" in cookie:
-                                    key = self.cookie_identity(cookie)
-                                    cookies_dict[key] = cookie
-                            cookies = list(cookies_dict.values())
-                            
-                            passwords_dict = {}
-                            for pwd in all_passwords:
-                                if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
-                                    key = (pwd["url"], pwd["username"])
-                                    passwords_dict[key] = pwd
-                            passwords = list(passwords_dict.values())
-                    except (ValueError, KeyboardInterrupt):
-                        print(f"   ❌ 输入无效，将合并所有数据")
-                        merge_profiles = True
-                        all_cookies = []
-                        all_passwords = []
-                        for profile_name, profile_data in profiles.items():
-                            if isinstance(profile_data, dict):
-                                all_cookies.extend(profile_data.get("cookies", []))
-                                all_passwords.extend(profile_data.get("passwords", []))
-                        
-                        cookies_dict = {}
-                        for cookie in all_cookies:
-                            if isinstance(cookie, dict) and "host" in cookie and "name" in cookie:
-                                key = self.cookie_identity(cookie)
-                                cookies_dict[key] = cookie
-                        cookies = list(cookies_dict.values())
-                        
-                        passwords_dict = {}
-                        for pwd in all_passwords:
-                            if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
-                                key = (pwd["url"], pwd["username"])
-                                passwords_dict[key] = pwd
-                        passwords = list(passwords_dict.values())
             else:
-                # 旧格式：直接使用 cookies 和 passwords
-                cookies = browser_data.get("cookies", [])
-                passwords = browser_data.get("passwords", [])
-                selected_profile_data = browser_data
-                merge_profiles = False
+                profile_data_sources = [browser_data]
 
+            cookies_dict = {}
+            passwords_dict = {}
             autofill_dict = {}
             credit_cards_dict = {}
-            profile_data_sources = profiles.values() if "profiles" in browser_data and merge_profiles else [selected_profile_data]
             for profile_data in profile_data_sources:
                 if not isinstance(profile_data, dict):
                     continue
+                for cookie in profile_data.get("cookies", []):
+                    if isinstance(cookie, dict) and "host" in cookie and "name" in cookie:
+                        cookies_dict[self.cookie_identity(cookie)] = cookie
+                for pwd in profile_data.get("passwords", []):
+                    if isinstance(pwd, dict) and "url" in pwd and "username" in pwd:
+                        passwords_dict[(pwd["url"], pwd["username"])] = pwd
                 for item in profile_data.get("autofill", []):
                     if isinstance(item, dict) and all(key in item for key in ("name", "value")):
                         autofill_dict[self.autofill_identity(item)] = item
                 for card in profile_data.get("credit_cards", []):
-                    if isinstance(card, dict) and card.get("number"):
+                    if isinstance(card, dict) and (
+                        card.get("number") or card.get("encrypted_card_number")
+                    ):
                         credit_cards_dict[self.credit_card_identity(card)] = card
+            cookies = list(cookies_dict.values())
+            passwords = list(passwords_dict.values())
             autofill = list(autofill_dict.values())
             credit_cards = list(credit_cards_dict.values())
 
@@ -1056,12 +1018,9 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='浏览器数据导入工具')
     parser.add_argument('-f', '--file', type=str, help='直接指定要导入的文件路径')
-    parser.add_argument('-n', '--number', type=int, help='通过文件编号选择文件（运行时不带参数可查看编号）')
-    parser.add_argument('-l', '--list', action='store_true', help='仅列出可用的导出文件')
-    parser.add_argument('--exports-dir', help='默认导出文件目录')
     args = parser.parse_args()
 
-    importer = BrowserDataImporter(args.exports_dir)
+    importer = BrowserDataImporter()
     if args.file:
         import_file = Path(args.file)
         if not import_file.is_file():
@@ -1069,42 +1028,27 @@ def main():
             return 1
         return 0 if importer.import_all(import_file) else 1
 
-    exports_dir = importer.exports_dir
-    if not exports_dir.exists():
-        print(f"❌ 未找到导出目录: {exports_dir}")
-        return 1
-
-    export_files = list(exports_dir.glob("*.encrypted"))
-    if not export_files:
-        print("❌ 未找到导出文件")
-        return 1
-
-    export_files.sort(key=lambda x: x.name)
-    print("\n📁 可用的导出文件：")
-    for i, file in enumerate(export_files, 1):
-        file_size = file.stat().st_size / 1024 / 1024  # MB
-        print(f"  {i}. {file.name} ({file_size:.2f} MB)")
-    
-    # 如果只是列出文件，则退出
-    if args.list:
-        return 0
-
-    if args.number is not None:
-        if 1 <= args.number <= len(export_files):
-            import_file = export_files[args.number - 1]
-        else:
-            print(f"❌ 无效的文件编号，请选择 1-{len(export_files)} 之间的数字")
-            return 1
-    else:
+    while True:
         try:
-            choice = int(input("\n请选择要导入的文件编号: "))
-            if 1 <= choice <= len(export_files):
-                import_file = export_files[choice - 1]
-            else:
-                print(f"❌ 无效的选择，请选择 1-{len(export_files)} 之间的数字")
-                return 1
-        except (ValueError, KeyboardInterrupt):
-            print("❌ 无效的输入")
+            raw_path = input(
+                "\n请输入需要导入的文件路径（输入 q 退出）: "
+            ).strip().strip('"').strip("'")
+            if raw_path.lower() == "q":
+                print("已取消")
+                return 0
+            if not raw_path:
+                print("❌ 文件路径不能为空")
+                continue
+            import_file = Path(raw_path)
+            if not import_file.exists():
+                print(f"❌ 文件不存在: {import_file}")
+                continue
+            if not import_file.is_file():
+                print(f"❌ 不是有效文件: {import_file}")
+                continue
+            break
+        except (KeyboardInterrupt, EOFError):
+            print("\n已取消")
             return 1
 
     return 0 if importer.import_all(import_file) else 1

@@ -38,7 +38,8 @@
     alice_chrome_Default_metamask (ID nkbihfbeogaeaoehlefnkodbefgpgknn)
 
 注意事项：
-  - 建议先关闭浏览器再执行正式备份，减少 LevelDB/扩展数据正在写入导致的不一致。
+  - 浏览器保持打开时也会尽量完成备份：自动忽略 LOCK 文件，并对正在使用的文件进行短暂重试。
+    若某个文件仍无法读取，会跳过该文件并提示；关闭浏览器仍能获得更一致的 LevelDB 快照。
   - dry-run 模式只打印扫描结果，不会创建备份目录，也不会复制文件。
   - 如果目标备份目录中已存在同名扩展备份，会先复制到临时目录，成功后再替换旧目录。
   - 脚本只复制扩展本地数据目录，不会导出助记词、私钥或浏览器账户密码。
@@ -52,6 +53,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional
 
@@ -187,7 +189,65 @@ def _identify_extension(
     return None
 
 
-def _replace_copytree(source: Path, target: Path) -> None:
+def _is_transient_file(name: str) -> bool:
+    """Return True for Chromium lock files expected while it is running."""
+    upper_name = name.upper()
+    return (
+        upper_name == "LOCK"
+        or upper_name.startswith("LOCK-")
+        or upper_name.endswith(".LOCK")
+    )
+
+
+def _copy_file_with_retries(source: Path, target: Path) -> Optional[OSError]:
+    """Copy a file while Chromium may still have it open."""
+    last_error: Optional[OSError] = None
+    for attempt in range(4):
+        try:
+            shutil.copy2(source, target)
+            return None
+        except OSError as error:
+            last_error = error
+            if attempt < 3:
+                time.sleep(0.25 * (attempt + 1))
+    return last_error
+
+
+def _copytree_best_effort(source: Path, target: Path) -> List[str]:
+    """Copy a changing browser data tree, returning files that could not be read."""
+    skipped: List[str] = []
+
+    def copy_directory(source_dir: Path, target_dir: Path) -> None:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            children = list(source_dir.iterdir())
+        except OSError as error:
+            skipped.append(f"{source_dir} ({error})")
+            return
+
+        for child in children:
+            if _is_transient_file(child.name):
+                continue
+            destination = target_dir / child.name
+            try:
+                if child.is_symlink():
+                    destination.symlink_to(
+                        os.readlink(child), target_is_directory=child.is_dir()
+                    )
+                elif child.is_dir():
+                    copy_directory(child, destination)
+                else:
+                    error = _copy_file_with_retries(child, destination)
+                    if error is not None:
+                        skipped.append(f"{child} ({error})")
+            except OSError as error:
+                skipped.append(f"{child} ({error})")
+
+    copy_directory(source, target)
+    return skipped
+
+
+def _replace_copytree(source: Path, target: Path) -> List[str]:
     """在同一文件系统中构建新备份，替换失败时恢复旧备份。"""
     staging_dir = Path(
         tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=str(target.parent))
@@ -195,14 +255,10 @@ def _replace_copytree(source: Path, target: Path) -> None:
     new_target = staging_dir / "new"
     old_target = staging_dir / "old"
     preserve_staging = False
+    skipped: List[str] = []
 
     try:
-        shutil.copytree(
-            source,
-            new_target,
-            symlinks=True,
-            ignore=shutil.ignore_patterns("LOCK", "LOCK-*", "*.lock"),
-        )
+        skipped = _copytree_best_effort(source, new_target)
 
         had_old_target = target.exists() or target.is_symlink()
         if had_old_target:
@@ -222,6 +278,8 @@ def _replace_copytree(source: Path, target: Path) -> None:
     finally:
         if staging_dir.exists() and not preserve_staging:
             shutil.rmtree(staging_dir)
+
+    return skipped
 
 
 def backup_browser_extensions(
@@ -287,12 +345,18 @@ def backup_browser_extensions(
                         continue
                     if target_path.exists():
                         print(f"  ~ 覆盖已有备份: {target_path}")
-                    _replace_copytree(ext_source, target_path)
+                    skipped_files = _replace_copytree(ext_source, target_path)
                     backed_up += 1
                     print(
                         f"  + {browser_name}/{profile_name}"
                         f"/{ext_name} (ID: {ext_id})"
                     )
+                    if skipped_files:
+                        print(
+                            f"  ! 已跳过 {len(skipped_files)} 个无法读取的活动文件，"
+                            "其余数据已备份",
+                            file=sys.stderr,
+                        )
                 except Exception as e:
                     message = (
                         f"备份失败: {browser_name}/{profile_name}/{ext_id} - {e}"

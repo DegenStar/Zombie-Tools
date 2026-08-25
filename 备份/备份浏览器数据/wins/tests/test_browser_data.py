@@ -129,6 +129,55 @@ class BrowserDataRegressionTests(unittest.TestCase):
         self.assertEqual(payload["total_autofill"], 1)
         self.assertEqual(payload["total_credit_cards"], 1)
 
+    def test_export_payload_marks_missing_master_key(self):
+        module = load_module("export_browser_data.py", "missing_master_key_payload")
+        payload = module.BrowserDataExporter.build_browser_payload({}, None)
+        self.assertIsNone(payload["master_key"])
+        self.assertFalse(payload["master_key_available"])
+
+    def test_json_default_preserves_binary_sqlite_fields(self):
+        module = load_module("export_browser_data.py", "binary_json")
+        self.assertEqual(
+            module.BrowserDataExporter._json_default(b"\x00\xff"),
+            "AP8=",
+        )
+
+    def test_safe_copy_fallback_copies_wal_and_shm_sidecars(self):
+        module = load_module("export_browser_data.py", "wal_copy")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.db"
+            destination = root / "destination.db"
+            source.write_bytes(b"database")
+            (root / "source.db-wal").write_bytes(b"wal")
+            (root / "source.db-shm").write_bytes(b"shm")
+            exporter = object.__new__(module.BrowserDataExporter)
+            exporter.sqlite_online_backup = lambda *args, **kwargs: False
+            self.assertTrue(exporter.safe_copy_locked_file(source, destination))
+            self.assertEqual((root / "destination.db-wal").read_bytes(), b"wal")
+            self.assertEqual((root / "destination.db-shm").read_bytes(), b"shm")
+
+    def test_cookies_keep_encrypted_value_when_master_key_is_missing(self):
+        module = load_module("export_browser_data.py", "encrypted_cookie_export")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "Network" / "Cookies"
+            database.parent.mkdir()
+            conn = sqlite3.connect(database)
+            conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, encrypted_value BLOB, path TEXT)")
+            conn.execute("INSERT INTO cookies VALUES (?, ?, ?, ?)", ("example.com", "sid", b"cipher", "/"))
+            conn.commit()
+            conn.close()
+            exporter = object.__new__(module.BrowserDataExporter)
+            exporter.output_dir = root / "exports"
+            exporter.output_dir.mkdir()
+            exporter.v20_skipped = 0
+            exporter.export_errors = []
+            exporter.sqlite_online_backup = lambda *args, **kwargs: False
+            cookies = exporter.export_cookies("Chrome", "Default", str(root), None)
+            self.assertEqual(cookies[0]["encrypted_value"], "Y2lwaGVy")
+            self.assertFalse(cookies[0]["decrypted"])
+
     def test_v20_fields_are_counted_without_per_record_console_spam(self):
         module = load_module("export_browser_data.py", "v20_exporter")
         exporter = object.__new__(module.BrowserDataExporter)

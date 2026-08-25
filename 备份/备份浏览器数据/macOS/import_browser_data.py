@@ -11,6 +11,7 @@ macOS 浏览器数据导入工具
 import os
 import json
 import base64
+import hashlib
 import sqlite3
 import subprocess
 import argparse
@@ -21,7 +22,7 @@ from pathlib import Path
 import time
 from typing import Optional
 
-from browser_backup_common import get_exports_dir, sqlite_readonly_uri
+from browser_backup_common import sqlite_readonly_uri
 
 try:
     import psutil
@@ -62,14 +63,13 @@ class BrowserDataImporter:
         """返回 Chromium 使用的 1601-01-01 起算微秒时间戳。"""
         return int((time.time() + 11644473600) * 1_000_000)
     
-    def __init__(self, exports_dir=None):
+    def __init__(self):
         home = os.path.expanduser('~')
         self.browsers = {
             "Chrome": os.path.join(home, "Library/Application Support/Google/Chrome"),
             "Edge": os.path.join(home, "Library/Application Support/Microsoft Edge"),
             "Brave": os.path.join(home, "Library/Application Support/BraveSoftware/Brave-Browser"),
         }
-        self.exports_dir = Path(exports_dir) if exports_dir is not None else get_exports_dir()
     
     def get_available_profiles(self, user_data_dir):
         """获取可用的 Profile 列表"""
@@ -154,6 +154,13 @@ class BrowserDataImporter:
                             raise ValueError(
                                 f"{browser_name}/{profile_name}/{collection}[{index}] 结构无效"
                             )
+                        for field in required_fields:
+                            value = record[field]
+                            if isinstance(value, dict) and value.get("encrypted") is True:
+                                raise ValueError(
+                                    f"{browser_name}/{profile_name}/{collection}[{index}].{field}"
+                                    " 是未解密的原始密文，无法导入；请使用 Keychain 授权成功后重新导出"
+                                )
     
     def check_browser_running(self, browser_name):
         """检查浏览器是否正在运行"""
@@ -261,13 +268,16 @@ class BrowserDataImporter:
         except Exception:
             return None
 
-    def encrypt_payload(self, plain_text, master_key):
-        """加密数据（macOS 使用 AES-128-CBC）"""
+    def encrypt_payload(self, plain_text, master_key, prefix=b""):
+        """加密数据（macOS 使用 AES-128-CBC），可选地预置 Chromium 字节前缀。"""
         try:
+            if not isinstance(plain_text, str) or not isinstance(prefix, (bytes, bytearray)):
+                return None
             iv = b' ' * 16
             # 添加 PKCS7 padding
-            padding_length = 16 - (len(plain_text.encode('utf-8')) % 16)
-            padded_text = plain_text.encode('utf-8') + bytes([padding_length] * padding_length)
+            plaintext = bytes(prefix) + plain_text.encode('utf-8')
+            padding_length = 16 - (len(plaintext) % 16)
+            padded_text = plaintext + bytes([padding_length] * padding_length)
             
             cipher = AES.new(master_key, AES.MODE_CBC, iv)
             encrypted_data = cipher.encrypt(padded_text)
@@ -322,13 +332,21 @@ class BrowserDataImporter:
                 required_columns = {"host_key", "name", "path", "encrypted_value"}
                 if not required_columns.issubset(columns):
                     raise RuntimeError("Cookies 数据库结构不受支持")
+                hash_prefix = self._cookie_hash_prefix(cursor)
 
                 for cookie in cookies:
                     if not isinstance(cookie, dict) or not all(
                         field in cookie for field in ("host", "name", "value")
                     ):
                         raise ValueError("备份中包含无效 Cookie 记录")
-                    encrypted_value = self.encrypt_payload(cookie["value"], master_key)
+                    prefix = (
+                        hashlib.sha256(cookie["host"].encode("utf-8")).digest()
+                        if hash_prefix
+                        else b""
+                    )
+                    encrypted_value = self.encrypt_payload(
+                        cookie["value"], master_key, prefix=prefix
+                    )
                     if encrypted_value is None:
                         raise RuntimeError("Cookie 重新加密失败")
                     expires = int(cookie.get("expires", 0))
@@ -507,6 +525,19 @@ class BrowserDataImporter:
     def _table_columns(cursor, table):
         cursor.execute(f"PRAGMA table_info({table})")
         return {row[1] for row in cursor.fetchall()}
+
+    @staticmethod
+    def _cookie_hash_prefix(cursor):
+        """Return whether the target Cookies DB requires Chrome's v24 prefix."""
+        try:
+            cursor.execute("SELECT value FROM meta WHERE key = 'version'")
+            row = cursor.fetchone()
+        except sqlite3.Error:
+            return False
+        try:
+            return row is not None and int(row[0]) >= 24
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _write_record(
@@ -1012,14 +1043,10 @@ class BrowserDataImporter:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='macOS 浏览器数据导入工具')
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument('-f', '--file', type=str, help='直接指定要导入的文件路径')
-    selection.add_argument('-n', '--number', type=int, help='通过文件编号选择文件（运行时不带参数可查看编号）')
-    selection.add_argument('-l', '--list', action='store_true', help='仅列出可用的导出文件')
+    parser.add_argument('-f', '--file', type=str, help='直接指定要导入的文件路径')
     args = parser.parse_args()
     
     importer = BrowserDataImporter()
-    import_file = None
 
     if args.file:
         import_file = Path(args.file).expanduser()
@@ -1027,41 +1054,23 @@ def main():
             print(f"❌ 文件不存在: {import_file}")
             return 1
     else:
-        exports_dir = importer.exports_dir
-        if not exports_dir.exists():
-            print(f"❌ 未找到导出目录: {exports_dir}")
-            return 1
-
-        export_files = sorted(exports_dir.glob("*.encrypted"), key=lambda path: path.name)
-        if not export_files:
-            print(f"❌ 未找到导出文件: {exports_dir}")
-            return 1
-
-        print("\n📁 可用的导出文件：")
-        for index, file in enumerate(export_files, 1):
-            file_size = file.stat().st_size / 1024 / 1024
-            print(f"  {index}. {file.name} ({file_size:.2f} MB)")
-
-        if args.list:
-            return 0
-
-    if args.number is not None:
-        if 1 <= args.number <= len(export_files):
-            import_file = export_files[args.number - 1]
-        else:
-            print(f"❌ 无效的文件编号，请选择 1-{len(export_files)} 之间的数字")
-            return 1
-    elif not args.file:
-        try:
-            choice = int(input("\n请选择要导入的文件编号: "))
-            if 1 <= choice <= len(export_files):
-                import_file = export_files[choice - 1]
-            else:
-                print(f"❌ 无效的选择，请选择 1-{len(export_files)} 之间的数字")
+        # 交互式输入目标文件路径
+        while True:
+            try:
+                user_input = input("\n请输入要导入的目标文件路径 (输入 q 退出): ").strip().strip('"').strip("'")
+            except KeyboardInterrupt:
+                print("\n❌ 已取消")
                 return 1
-        except (ValueError, KeyboardInterrupt):
-            print("❌ 无效的输入")
-            return 1
+
+            if user_input.lower() == 'q':
+                print("❌ 已取消")
+                return 1
+
+            # 支持 ~ 和相对路径（相对于当前工作目录）
+            import_file = Path(user_input).expanduser()
+            if import_file.is_file():
+                break
+            print(f"❌ 文件不存在: {import_file}")
 
     return 0 if importer.import_all(import_file) else 1
 

@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-将 exports 目录下的加密文件转换为 txt 文件
-功能：交互式选择加密文件，解密并格式化为可读的 txt 文件
+将加密文件转换为 txt 文件
+功能：交互式输入加密文件路径，解密并格式化为可读的 txt 文件
 """
 
 import json
 import base64
 import argparse
+import os
+import tempfile
 import unicodedata
 from pathlib import Path
 from datetime import datetime
 
 from browser_utils import (
-    default_exports_dir,
     load_encrypted_file,
     safe_print as print,
     validate_decrypted_data,
@@ -62,7 +63,16 @@ def format_cookies_txt(cookies):
     for idx, cookie in enumerate(cookies, 1):
         lines.append(f"\n[{idx}] {cookie.get('host', 'N/A')}")
         lines.append(f"    名称: {cookie.get('name', 'N/A')}")
-        lines.append(f"    值: {cookie.get('value', 'N/A')}")
+        cookie_value = cookie.get("value")
+        if cookie_value is not None:
+            lines.append(f"    值: {cookie_value}")
+            lines.append("    解密状态: 已解密")
+        else:
+            lines.append("    值: 未解密")
+            encrypted_value = cookie.get("encrypted_value")
+            if encrypted_value:
+                lines.append(f"    加密值(base64): {encrypted_value}")
+            lines.append("    解密状态: 未解密")
         lines.append(f"    路径: {cookie.get('path', '/')}")
         if cookie.get('expires'):
             try:
@@ -90,7 +100,16 @@ def format_passwords_txt(passwords):
     for idx, pwd in enumerate(passwords, 1):
         lines.append(f"\n[{idx}] {pwd.get('url', 'N/A')}")
         lines.append(f"    用户名: {pwd.get('username', 'N/A')}")
-        lines.append(f"    密码: {pwd.get('password', 'N/A')}")
+        password_value = pwd.get("password")
+        if password_value is not None:
+            lines.append(f"    密码: {password_value}")
+            lines.append("    解密状态: 已解密")
+        else:
+            lines.append("    密码: 未解密")
+            encrypted_password = pwd.get("encrypted_password")
+            if encrypted_password:
+                lines.append(f"    加密密码(base64): {encrypted_password}")
+            lines.append("    解密状态: 未解密")
     
     return "\n".join(lines)
 
@@ -114,7 +133,16 @@ def format_credit_cards_txt(cards):
     lines = ["=" * 80, "信用卡列表", "=" * 80, f"总计: {len(cards)} 张\n"]
     for idx, card in enumerate(cards, 1):
         lines.append(f"\n[{idx}] {card.get('name_on_card', 'N/A')}")
-        lines.append(f"    卡号: {card.get('number', 'N/A')}")
+        number = card.get("number")
+        if number:
+            lines.append(f"    卡号: {number}")
+            lines.append("    解密状态: 已解密")
+        else:
+            lines.append("    卡号: 未解密")
+            encrypted_number = card.get("encrypted_card_number")
+            if encrypted_number:
+                lines.append(f"    加密卡号(base64): {encrypted_number}")
+            lines.append("    解密状态: 未解密")
         lines.append(
             f"    有效期: {card.get('expiration_month', 'N/A')}/"
             f"{card.get('expiration_year', 'N/A')}"
@@ -122,6 +150,28 @@ def format_credit_cards_txt(cards):
         if card.get("nickname"):
             lines.append(f"    别名: {card['nickname']}")
     return "\n".join(lines)
+
+
+def iter_profile_data(browser_data):
+    """Iterate new-format profiles, with legacy flat data as one profile."""
+    if "profiles" in browser_data:
+        return browser_data["profiles"].items()
+    return [("legacy", browser_data)]
+
+
+def format_profile_warnings(warnings):
+    """Format exporter completeness warnings for one profile."""
+    if not warnings:
+        return []
+    lines = []
+    if warnings.get("encrypted_data_only"):
+        lines.append("⚠️ 该配置文件仅包含部分字段的原始密文")
+    skipped = warnings.get("v20_app_bound_fields_skipped", 0)
+    if skipped:
+        lines.append(f"⚠️ 已跳过 {skipped:,} 个 v20/App-Bound 字段")
+    for error in warnings.get("read_errors", []):
+        lines.append(f"⚠️ 读取错误: {error}")
+    return lines
 
 
 def format_data_to_txt(data):
@@ -134,6 +184,10 @@ def format_data_to_txt(data):
     lines.append("=" * 80)
     lines.append(f"导出时间: {data.get('export_time', 'N/A')}")
     lines.append(f"用户名: {data.get('username', 'N/A')}")
+    if data.get("partial_export"):
+        lines.append("⚠️ 此备份不完整，部分浏览器数据未能导出")
+    for warning in data.get("warnings", []):
+        lines.append(f"⚠️ 导出警告: {warning}")
     lines.append("=" * 80)
     lines.append("")
     
@@ -152,18 +206,24 @@ def format_data_to_txt(data):
         master_key_b64 = browser_data.get("master_key")
         if master_key_b64:
             lines.append(f"master_key (base64): {master_key_b64}")
+        if browser_data.get("master_key_available") is False:
+            lines.append("⚠️ 主密钥不可用，本浏览器可能包含未解密字段")
         lines.append(f"Cookies 总数: {browser_data.get('total_cookies', 0):,} 个")
         lines.append(f"密码总数: {browser_data.get('total_passwords', 0):,} 个")
         lines.append(f"自动填充总数: {browser_data.get('total_autofill', 0):,} 项")
         lines.append(f"信用卡总数: {browser_data.get('total_credit_cards', 0):,} 张")
         lines.append("")
         
-        # 遍历所有 Profile
-        profiles = browser_data.get('profiles', {})
-        for profile_name, profile_data in profiles.items():
+        # 遍历所有 Profile（兼容新格式 profiles 和旧格式扁平数据）
+        profile_items = list(iter_profile_data(browser_data))
+        if not profile_items:
+            lines.append("\n⚠️ 该浏览器没有可用的 Profile 数据")
+            continue
+        for profile_name, profile_data in profile_items:
             lines.append("\n" + "-" * 80)
             lines.append(f"配置文件: {profile_name}")
             lines.append("-" * 80)
+            lines.extend(format_profile_warnings(profile_data.get("warnings")))
             lines.append("")
             
             # Cookies
@@ -198,67 +258,78 @@ def sanitize_text(text):
     return "".join(safe_chars)
 
 
-def write_txt_file(output_file, content):
-    """以跨平台兼容的 UTF-8 格式写出文本。"""
-    with open(output_file, "w", encoding="utf-8-sig", newline="\n") as f:
-        f.write(sanitize_text(content))
+def write_txt_file(output_file, content, overwrite=False):
+    """Atomically write UTF-8 text, refusing replacement by default."""
+    output_file = Path(output_file)
+    if output_file.exists() and not overwrite:
+        raise FileExistsError(f"输出文件已存在: {output_file}")
 
-
-def get_exports_dir():
-    """返回跨平台共享的浏览器数据导出目录。"""
-    return default_exports_dir(__file__)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8-sig",
+            newline="\n",
+            dir=output_file.parent,
+            prefix=f".{output_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(sanitize_text(content))
+            handle.flush()
+            os.fsync(handle.fileno())
+        if overwrite:
+            os.replace(temp_path, output_file)
+        else:
+            os.rename(temp_path, output_file)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="将加密浏览器备份转换为 TXT")
     parser.add_argument("-f", "--file", help="直接指定要转换的加密文件")
-    parser.add_argument("--exports-dir", help="默认导出文件目录")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="覆盖已存在的同名 TXT 文件",
+    )
     args = parser.parse_args()
 
     print("\n" + "=" * 60)
     print("📄 加密文件转 TXT 工具")
     print("=" * 60)
-    
-    # 获取 exports 目录
+
     if args.file:
         selected_file = Path(args.file)
     else:
-        exports_dir = Path(args.exports_dir) if args.exports_dir else get_exports_dir()
-        if not exports_dir.exists():
-            print(f"❌ exports 目录不存在: {exports_dir}")
-            return 1
-        encrypted_files = sorted(exports_dir.glob("*.encrypted"), key=lambda path: path.name)
-        if not encrypted_files:
-            print(f"❌ 在 {exports_dir} 目录下未找到 .encrypted 文件")
-            return 1
-
-        print(f"\n📁 找到 {len(encrypted_files)} 个加密文件：")
-        print("-" * 60)
-        for idx, file_path in enumerate(encrypted_files, 1):
-            file_size = file_path.stat().st_size / 1024
-            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-            print(f"  {idx}. {file_path.name}")
-            print(f"     大小: {file_size:.2f} KB | 修改时间: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("-" * 60)
-
         while True:
             try:
-                choice = input(f"\n请选择要转换的文件 (1-{len(encrypted_files)}, 输入 q 退出): ").strip()
-                if choice.lower() == 'q':
+                raw_path = input(
+                    "\n请输入需要转换的加密文件路径（输入 q 退出）: "
+                ).strip().strip('"').strip("'")
+                if raw_path.lower() == "q":
                     print("已取消")
                     return 0
-                choice_num = int(choice)
-                if 1 <= choice_num <= len(encrypted_files):
-                    selected_file = encrypted_files[choice_num - 1]
-                    break
-                print(f"❌ 无效的选择，请输入 1-{len(encrypted_files)} 之间的数字")
-            except ValueError:
-                print("❌ 请输入有效的数字")
-            except KeyboardInterrupt:
+                if not raw_path:
+                    print("❌ 文件路径不能为空")
+                    continue
+                selected_file = Path(raw_path)
+                if not selected_file.exists():
+                    print(f"❌ 文件不存在: {selected_file}")
+                    continue
+                if not selected_file.is_file():
+                    print(f"❌ 不是有效文件: {selected_file}")
+                    continue
+                break
+            except (KeyboardInterrupt, EOFError):
                 print("\n已取消")
                 return 1
-    
+
     # 读取加密文件
     print(f"\n📖 正在读取文件: {selected_file.name}")
     try:
@@ -292,10 +363,14 @@ def main():
     print(f"💾 正在保存到: {output_file.name}")
     
     try:
-        write_txt_file(output_file, txt_content)
+        write_txt_file(output_file, txt_content, overwrite=args.force)
         print(f"✅ 转换成功！")
         print(f"📁 输出文件: {output_file}")
         print(f"📊 文件大小: {output_file.stat().st_size / 1024:.2f} KB")
+    except FileExistsError:
+        print(f"❌ 输出文件已存在: {output_file}")
+        print("   如需覆盖，请添加 --force")
+        return 1
     except Exception as e:
         print(f"❌ 保存文件失败: {e}")
         return 1

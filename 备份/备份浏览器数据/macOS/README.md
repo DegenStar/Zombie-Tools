@@ -1,4 +1,4 @@
-# 浏览器数据备份与恢复工具（**macOS版本**）
+# 浏览器数据备份与恢复工具（macOS 版）
 
 ## ⚠️ 重要警告
 
@@ -8,7 +8,7 @@
 2. **不要分享导出文件给任何人**
 3. **导出文件使用固定密码 `cookies2026` 加密**
 4. **使用完毕后立即删除导出文件**
-5. **不要上传到云存储或公共网络**
+5. **不要上传到公共云存储或公共网络**
 6. **妥善保管脚本文件（包含加密密码）**
 
 ---
@@ -17,14 +17,33 @@
 
 ### 1. 导出工具 (`export_browser_data.py`)
 - 从 Chrome/Edge/Brave 浏览器导出 Cookies、密码、自动填充和本地信用卡信息
+- 支持选择单个 Profile 或导出全部 Profile
 - 使用 AES-256-GCM 加密导出文件
 - 自动使用预设密码 `cookies2026` 加密
+- 支持浏览器运行时导出，优先使用 SQLite Online Backup 创建一致快照
+- 排它锁导致在线备份不可用时，使用经过稳定性和完整性校验的文件级快照
+- Keychain 授权失败时生成降级备份：自动填充保持明文，Cookies、密码和信用卡保留源端原始密文
+- 数据库读取、结构识别或已授权情况下的字段解密失败时中止，不生成不完整文件
+- 使用格式版本 2，并以原子写入和 `0600` 权限保存备份
 
 ### 2. 导入工具 (`import_browser_data.py`)
 - 将加密的备份文件导入到新环境的浏览器
-- 自动备份现有浏览器数据
-- 支持选择导入文件
+- 无参数运行时输入任意备份文件路径，也可使用 `-f/--file` 直接指定
+- 支持格式版本 1 和 2；写入前验证完整数据结构
+- 拒绝包含未解密原始密文的降级备份，要求在 Keychain 授权成功后重新导出
+- 支持选择源 Profile、合并多个源 Profile，并选择目标 Profile
+- 通过 SQLite Online Backup 自动备份现有浏览器数据库，备份文件权限为 `0600`
 - 自动填充按字段名和值覆盖；信用卡优先按 GUID 覆盖
+- Cookie 导入兼容 Chromium v24+ 的域名哈希前缀
+- 数据库写入采用事务，任一请求的数据失败时回滚该数据库并返回非零退出码
+
+### 3. 转换工具 (`convert_to_txt.py`)
+- 将加密备份转换为包含 Cookies、密码、自动填充和信用卡的可读 txt 文件
+- 无参数运行时输入任意备份文件路径，也可使用 `-f/--file` 直接指定
+- 兼容格式版本 1 和 2，并在转换前验证数据结构
+- 降级备份中的敏感字段显示为未解密占位符，原始密文不会写入 txt
+- 默认拒绝覆盖同名 txt；使用 `--force` 可显式覆盖
+- 在输入文件所在目录原子写入 UTF-8 BOM、`0600` 权限的同名 txt 文件
 
 ---
 
@@ -52,17 +71,24 @@ pip3 install -r requirements.txt
 python3 export_browser_data.py
 ```
 
-2. 脚本将自动使用预设密码 `cookies2026` 加密数据
+2. 为每个已安装浏览器选择要导出的 Profile：输入 `0` 导出全部，或输入对应编号导出单个 Profile
 
-3. 导出文件统一保存在 `Zombie-Tools/BACKUP/浏览器数据/exports/macOS/`，格式为：
+3. macOS 弹出 Keychain 授权窗口时选择“允许”；每个浏览器的授权等待最长 15 秒
+
+4. 脚本自动使用预设密码 `cookies2026` 加密数据
+
+5. 导出文件统一保存在 `Zombie-Tools/BACKUP/浏览器数据/exports/macOS/`，格式为：
    ```
    {用户名}_browser_data_YYYYMMDD_HHMMSS.encrypted
    ```
 
 **注意**：脚本支持在浏览器运行时导出数据，使用了以下技术：
 - SQLite Online Backup API 创建包含 WAL 数据的一致快照
+- 数据库被排它锁占用时，有限重试文件级快照并执行稳定性检查和 SQLite `quick_check`
 - 快照只保存在系统私有临时目录，并在读取完成后自动清理
-- 任一数据库读取、结构识别或字段解密失败时中止，不生成不完整备份
+- 最终备份采用原子写入，新建目录权限为 `0700`，文件权限为 `0600`
+
+如果 Keychain 授权失败，导出器会生成**降级备份**：自动填充数据仍可读取，Cookies、密码和信用卡卡号保存为带标记的 Base64 原始密文。此类密文仍绑定源端 Keychain，不能跨用户或跨设备导入。降级导出会显示醒目警告，但当前仍以成功码退出，自动化任务还应检查控制台警告或备份中的 `master_key_available`。除 Keychain 授权失败外，数据库快照、结构识别或敏感字段解密失败都会中止整个导出，不生成文件。
 
 ### 步骤 2：备份导出文件
 
@@ -73,27 +99,53 @@ python3 export_browser_data.py
 
 ### 步骤 3：在新环境导入
 
-1. 将 `.encrypted` 文件复制到新机器的 `Zombie-Tools/BACKUP/浏览器数据/exports/macOS/` 目录；也可以通过 `--file` 指定任意位置
+1. 将 `.encrypted` 文件安全复制到新机器；文件可以位于任意可访问目录
 
 2. **关闭所有浏览器窗口**（重要！）
 
-3. 运行导入脚本：
+3. 运行导入脚本并按提示输入文件路径：
 ```bash
 python3 import_browser_data.py
+```
+支持 `~`、相对路径和绝对路径；输入 `q` 可退出。
 
-# 直接导入指定文件，不依赖默认导出目录
+也可以通过参数直接指定文件：
+```bash
+python3 import_browser_data.py -f ~/backup/browser_data.encrypted
+# 或
 python3 import_browser_data.py --file /path/to/backup.encrypted
 ```
 
-4. 选择要导入的文件编号
+4. 查看备份统计并确认导入（输入 `yes`）
 
-5. 脚本将自动使用预设密码 `cookies2026` 解密
+5. 选择对应浏览器的目标 Profile，并按提示允许目标浏览器的 Keychain 访问
 
-6. 确认导入（输入 `yes`）
+6. 对包含多个源 Profile 的浏览器，选择一个源 Profile 或合并全部源数据
 
 7. **重启浏览器**以应用更改
 
-导入前会通过 SQLite Online Backup 创建当前数据库的一致备份。任一请求的数据写入失败或被跳过时，程序会明确显示失败摘要并返回非零退出码。
+导入器在任何浏览器写入前都会验证整个备份。若发现降级备份中的未解密原始密文，会拒绝导入并提示在 Keychain 授权成功后重新导出。实际写入前会通过 SQLite Online Backup 创建当前数据库的一致备份；任一请求的数据写入失败时回滚对应数据库、显示失败摘要并返回非零退出码。
+
+### 步骤 4：转换为文本文件（可选）
+
+1. 运行转换工具并按提示输入文件路径：
+```bash
+python3 convert_to_txt.py
+```
+
+也可以直接指定文件：
+```bash
+python3 convert_to_txt.py -f ~/backup/browser_data.encrypted
+```
+
+2. txt 文件生成在输入文件所在目录，并使用相同主文件名
+
+3. 如果同名 txt 已存在，工具默认拒绝覆盖；确认需要替换时使用：
+```bash
+python3 convert_to_txt.py -f ~/backup/browser_data.encrypted --force
+```
+
+转换降级备份时，未解密的 Cookie 值、密码和信用卡卡号显示为 `[未解密：导出时 Keychain 授权失败]`，原始 Base64 密文不会写入 txt。txt 会包含已成功解密的敏感数据，并在可用时包含 Base64 源主密钥，使用后应立即删除。
 
 ---
 
@@ -108,12 +160,14 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 导出格式（加密前）：
 ```json
 {
+  "format_version": 2,
   "export_time": "2026-01-19 12:00:00",
   "username": "用户名",
   "platform": "macOS",
   "browsers": {
     "Chrome": {
       "master_key": "<Base64 源浏览器主密钥>",
+      "master_key_available": true,
       "profiles": {
         "Default": {
           "cookies": [...],
@@ -137,6 +191,13 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 }
 ```
 
+**数据结构说明**：
+- `format_version` 当前为 `2`；导入和转换工具同时兼容没有版本字段的旧格式（按版本 1 处理）
+- `profiles` 按浏览器 Profile 分组保存 Cookies、密码、自动填充和信用卡
+- Keychain 授权成功时，敏感字段保存为明文，再由外层 AES-256-GCM 统一加密
+- Keychain 授权失败时，`master_key` 为 `null`、`master_key_available` 为 `false`，敏感字段保存为 `{"encrypted": true, "data": "<Base64>"}`
+- 降级备份可转换为带占位符的 txt 供检查，但不能导入；需要授权 Keychain 后重新导出
+
 ---
 
 ## 安全建议
@@ -144,7 +205,7 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 ### 加密密码
 - 脚本使用预设密码 `cookies2026` 自动加密/解密
 - 此密码已硬编码在脚本中，方便自动化使用
-- ⚠️ **重要**：确保导出文件的存储安全，因为密码是固定的
+- ⚠️ **重要**：固定密码不等于可靠的长期密钥管理，必须把导出文件视为高敏感数据
 
 ### 文件存储
 - **不要**将导出文件与脚本存放在同一公共位置
@@ -165,7 +226,8 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 
 ### 问题 1：需要 Keychain 访问权限
 - **原因**：脚本需要访问 macOS Keychain 获取浏览器主密钥
-- **解决**：在弹出的权限对话框中点击"允许"或"始终允许"
+- **解决**：在弹出的权限对话框中点击“允许”或“始终允许”；授权请求 15 秒内未响应会超时
+- **非图形会话**：先在 macOS“终端”应用中运行一次脚本并完成授权，再执行自动化任务
 
 ### 问题 2：导入失败
 - **原因**：浏览器正在运行
@@ -179,12 +241,24 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 - **原因**：未重启浏览器
 - **解决**：完全关闭并重启浏览器
 
+### 问题 5：提示“未解密的原始密文，无法导入”
+- **原因**：导出时 Keychain 授权失败，生成的是降级备份
+- **解决**：回到源 Mac，在图形终端中重新导出并允许对应浏览器的 Keychain 访问；不要尝试直接复制源端密文
+
+### 问题 6：无法确认浏览器是否已关闭
+- **原因**：缺少 `psutil` 或进程检查失败
+- **解决**：运行 `pip3 install -r requirements.txt`，完全关闭浏览器后重试；为避免损坏数据，导入器不会在状态未知时继续写入
+
+### 问题 7：转换时提示输出文件已存在
+- **原因**：转换工具默认不会静默覆盖已有 txt
+- **解决**：确认旧文件可以替换后添加 `--force`
+
 ---
 
 ## 技术原理
 
 ### 浏览器加密机制
-- **Chrome/Brave** 使用 **macOS Keychain + AES-128-CBC** 加密敏感数据
+- Chromium 浏览器通过 macOS Keychain 派生密钥，并按字段版本使用 AES-128-CBC（`v10`）或 AES-GCM（`v11`）
 - **Edge** 使用 **Microsoft Edge Safe Storage** Keychain 项
 - 主密钥存储在 Keychain 中（"Chrome Safe Storage" 等）
 - Cookies 存储在 SQLite 数据库（`Cookies`）
@@ -198,16 +272,23 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
    - 使用 `sqlite3.Connection.backup()` API
    - 以只读模式打开数据库（`mode=ro`）
    - 将主数据库和 WAL 中已提交的数据复制到一致快照
+   - 设置忙等待和 30 秒总超时，避免无限期卡住
    - 不影响浏览器的正常使用
 
-2. **私有临时快照**
+2. **排它锁回退**
+   - 在线备份无法读取被排它锁占用的数据库时，回退到文件级快照
+   - 最多尝试 3 次，并比较复制前后的文件大小
+   - 使用 SQLite `quick_check` 验证快照；无法获得稳定快照时要求关闭浏览器重试
+
+3. **私有临时快照**
    - 快照位于系统临时目录，而不是长期保存的导出目录
    - 文件权限限制为仅当前用户可读写
    - 无论成功或失败都会在退出读取流程时清理
 
-3. **完整性优先**
+4. **完整性优先**
    - 数据库结构不兼容、快照失败或敏感字段无法解密时终止导出
    - 不再把读取错误当作“没有数据”继续生成备份
+   - 唯一降级路径是 Keychain 密钥不可用，此时原始密文会被显式标记
 
 **注意**：虽然支持在线导出，但数据可能略有延迟（浏览器可能还在写入新数据）
 
@@ -217,15 +298,19 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 3. 使用主密钥解密 Cookies、密码和信用卡卡号为**明文**
 4. 使用预设密码 `cookies2026`（PBKDF2 + AES-256-GCM）加密导出文件
 
+Keychain 密钥不可用时不会使用默认密钥。工具保留源端原始密文并生成降级备份；该密文仍受源 Keychain 约束，不能用于跨用户迁移。
+
 ### 导入流程
 1. 使用密码 `cookies2026` 解密导出文件（获得明文数据）
-2. 获取**目标 Mac**浏览器主密钥（从 Keychain）
-3. 通过 SQLite Online Backup 备份目标数据库；备份失败则停止写入
-4. 使用目标主密钥**重新加密**敏感数据（包括信用卡卡号）
-5. 在 SQLite 事务中写入目标数据库，异常时自动回滚
-6. 汇总每类数据的成功/失败数量，并用进程退出码反映最终结果
+2. 验证格式版本、嵌套结构和敏感字段；发现降级密文时在写入前拒绝整个备份
+3. 获取**目标 Mac**浏览器主密钥（从 Keychain）
+4. 通过 SQLite Online Backup 备份目标数据库；备份失败则停止写入
+5. 使用目标主密钥**重新加密**敏感数据（包括信用卡卡号）
+6. 针对 Chromium v24+ Cookie 数据库加入域名 SHA-256 前缀
+7. 在 SQLite 事务中写入目标数据库，异常时自动回滚
+8. 汇总每类数据的成功/失败数量，并用进程退出码反映最终结果
 
-**关键点**：脚本在中间环节将数据转换为明文，因此不受 Keychain 用户绑定限制
+**关键点**：只有在源端成功解密为明文的数据才能用目标 Keychain 重新加密。降级备份中的原始密文不能解除源用户绑定，因此导入器会拒绝它。
 
 ---
 
@@ -233,7 +318,7 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 
 ### 跨用户账户支持
 
-**✅ 本脚本支持跨 macOS 用户账户使用**
+**✅ 对成功解密为明文的数据，本脚本支持跨 macOS 用户账户使用**
 
 **原理说明**：
 1. **导出阶段**：在用户 A 的账户下从 Keychain 获取密钥并解密为明文
@@ -267,6 +352,8 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 - 导入后首次使用可能需要重新验证某些敏感操作
 - 浏览器数据库结构会随版本变化；遇到未知必填字段时，脚本会安全失败并保留导入前备份
 - 固定密码 `cookies2026` 仍是安全限制，应对导出文件进行二次加密并避免上传公共位置
+- Keychain 授权失败生成的降级备份不能导入，只能转换为隐藏原始密文的 txt 进行检查
+- 不支持绕过 Chromium v20/App-Bound Encryption
 
 ---
 
@@ -276,6 +363,25 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 - 使用者需承担所有责任和风险
 - 作者不对数据丢失或安全问题负责
 - **禁止用于非法目的**
+
+---
+
+## 命令行参数参考
+
+导出工具当前没有额外命令行参数，直接运行 `python3 export_browser_data.py`。
+
+### 导入工具 (`import_browser_data.py`)
+
+| 参数 | 简写 | 说明 | 示例 |
+|------|------|------|------|
+| `--file` | `-f` | 直接指定要导入的文件路径 | `-f ~/backup/file.encrypted` |
+
+### 转换工具 (`convert_to_txt.py`)
+
+| 参数 | 简写 | 说明 | 示例 |
+|------|------|------|------|
+| `--file` | `-f` | 直接指定要转换的文件路径 | `-f ~/backup/file.encrypted` |
+| `--force` |  | 覆盖已存在的同名 txt 文件 | `--force` |
 
 ---
 
@@ -294,6 +400,9 @@ python3 import_browser_data.py --file /path/to/backup.encrypted
 
 Zombie-Tools/BACKUP/浏览器数据/exports/macOS/
 └── {用户名}_browser_data_*.encrypted
+
+任意输入文件所在目录/
+└── *.txt                            # 转换工具生成的同名明文文件
 ```
 
 ---
@@ -317,6 +426,14 @@ python3 -m unittest discover -s tests -v
 ---
 
 ## 更新日志
+
+### v1.2.0 (2026-08-25)
+- Keychain 授权失败时生成带明确密文标记的降级备份，不使用默认密钥
+- 导入器在写入前拒绝降级备份，避免复制绑定源端 Keychain 的密文
+- 导入和转换改为输入任意文件路径，移除目录扫描和编号选择
+- 转换工具新增 `-f/--file` 与 `--force`，未解密字段使用占位符且不输出原始密文
+- 支持 Chromium v24+ Cookie 域名哈希前缀
+- 在线备份遇到排它锁时增加经过稳定性和完整性校验的文件级快照回退
 
 ### v1.1.0 (2026-08-23)
 - 修复密码导入代码不可达问题

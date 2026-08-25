@@ -74,7 +74,11 @@ class BrowserDataExporter:
         """构建包含源浏览器主密钥的备份数据。"""
         return {
             "profiles": profiles,
-            "master_key": base64.b64encode(master_key).decode("utf-8"),
+            "master_key": (
+                base64.b64encode(master_key).decode("utf-8")
+                if master_key else None
+            ),
+            "master_key_available": bool(master_key),
             "total_cookies": sum(len(profile.get("cookies", [])) for profile in profiles.values()),
             "total_passwords": sum(len(profile.get("passwords", [])) for profile in profiles.values()),
             "total_autofill": sum(len(profile.get("autofill", [])) for profile in profiles.values()),
@@ -87,7 +91,6 @@ class BrowserDataExporter:
         local_state_path = os.path.join(os.path.dirname(browser_path), "Local State")
         if not os.path.exists(local_state_path):
             return None
-        
         try:
             with open(local_state_path, "r", encoding="utf-8") as f:
                 local_state = json.load(f)
@@ -107,6 +110,25 @@ class BrowserDataExporter:
         except Exception as e:
             print(f"❌ 获取主密钥失败: {e}")
             return None
+
+    @staticmethod
+    def _json_default(value):
+        """将 SQLite BLOB 转为可逆的 Base64 字符串。"""
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return base64.b64encode(bytes(value)).decode("ascii")
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+    @staticmethod
+    def _copy_wal_sidecars(source_path, dest_path):
+        """普通文件复制时同步 SQLite 的 WAL/SHM 旁车文件。"""
+        for suffix in ("-wal", "-shm"):
+            sidecar = f"{source_path}{suffix}"
+            if not os.path.isfile(sidecar):
+                continue
+            try:
+                shutil.copy2(sidecar, f"{dest_path}{suffix}")
+            except OSError:
+                pass
     
     def decrypt_payload(self, cipher_text, master_key):
         """严格解密 Windows 浏览器字段，失败时返回 None。"""
@@ -142,6 +164,7 @@ class BrowserDataExporter:
             try:
                 # 方法 1：直接复制（Windows 允许读取被锁定文件）
                 shutil.copy2(source_path, dest_path)
+                self._copy_wal_sidecars(source_path, dest_path)
                 return True
             except PermissionError:
                 # 方法 2：使用二进制读写（绕过某些锁）
@@ -149,6 +172,7 @@ class BrowserDataExporter:
                     with open(source_path, 'rb') as src:
                         with open(dest_path, 'wb') as dst:
                             shutil.copyfileobj(src, dst)
+                    self._copy_wal_sidecars(source_path, dest_path)
                     return True
                 except Exception as e:
                     if attempt == max_retries - 1:
@@ -161,34 +185,51 @@ class BrowserDataExporter:
                 return False
         return False
     
-    def sqlite_online_backup(self, source_db, dest_db, timeout_seconds=15):
-        """使用 SQLite Online Backup 复制数据库"""
-        source_conn = None
-        dest_conn = None
-        try:
-            source_conn = sqlite3.connect(
-                f"file:{Path(source_db).resolve().as_posix()}?mode=ro", uri=True, timeout=1.0
-            )
-            dest_conn = sqlite3.connect(dest_db)
-            deadline = time.monotonic() + timeout_seconds
-
-            def check_deadline(status, remaining, total):
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(f"SQLite 在线备份超过 {timeout_seconds} 秒")
-
-            source_conn.backup(
-                dest_conn, pages=256, progress=check_deadline, sleep=0.05
-            )
-            print("✅ 使用在线备份成功")
-            return True
-        except Exception as e:
-            print(f"❌ 在线备份失败: {e}")
+    def sqlite_online_backup(self, source_db, dest_db, timeout_seconds=15, retries=3):
+        """使用 SQLite Online Backup 复制数据库，并重试瞬时锁冲突。"""
+        source_path = Path(source_db)
+        if not source_path.is_file():
             return False
-        finally:
-            if dest_conn is not None:
-                dest_conn.close()
-            if source_conn is not None:
-                source_conn.close()
+
+        last_error = None
+        for attempt in range(retries):
+            source_conn = dest_conn = None
+            try:
+                Path(dest_db).unlink(missing_ok=True)
+                try:
+                    source_conn = sqlite3.connect(
+                        f"file:{source_path.resolve().as_posix()}?mode=ro",
+                        uri=True,
+                        timeout=3.0,
+                    )
+                except (sqlite3.Error, OSError):
+                    source_conn = sqlite3.connect(str(source_path), timeout=3.0)
+                    source_conn.execute("PRAGMA query_only=ON")
+                source_conn.execute("PRAGMA busy_timeout=3000")
+                dest_conn = sqlite3.connect(dest_db, timeout=3.0)
+                deadline = time.monotonic() + timeout_seconds
+
+                def check_deadline(status, remaining, total):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"SQLite 在线备份超过 {timeout_seconds} 秒")
+
+                source_conn.backup(
+                    dest_conn, pages=256, progress=check_deadline, sleep=0.05
+                )
+                print("✅ 使用在线备份成功")
+                return True
+            except Exception as exc:
+                last_error = exc
+                if attempt < retries - 1:
+                    time.sleep(0.5)
+            finally:
+                if dest_conn is not None:
+                    dest_conn.close()
+                if source_conn is not None:
+                    source_conn.close()
+        if last_error is not None:
+            print(f"❌ 在线备份失败: {last_error}")
+        return False
 
     @staticmethod
     def _table_columns(cursor, table):
@@ -229,8 +270,23 @@ class BrowserDataExporter:
                 cursor.execute(f"SELECT {','.join(fields)} FROM cookies")
                 for row in cursor.fetchall():
                     record = dict(zip(fields, row))
-                    decrypted_value = self.decrypt_payload(record.pop("encrypted_value"), master_key)
+                    encrypted_value = record.pop("encrypted_value")
+                    decrypted_value = self.decrypt_payload(encrypted_value, master_key)
                     if decrypted_value is None:
+                        if not master_key and isinstance(encrypted_value, (bytes, bytearray)):
+                            cookie = {
+                                "host": record.pop("host_key"),
+                                "name": record.pop("name"),
+                                "value": None,
+                                "encrypted_value": base64.b64encode(bytes(encrypted_value)).decode("ascii"),
+                                "path": record.pop("path"),
+                                "expires": record.pop("expires_utc", 0),
+                                "secure": bool(record.pop("is_secure", 0)),
+                                "httponly": bool(record.pop("is_httponly", 0)),
+                                "decrypted": False,
+                            }
+                            cookie.update(record)
+                            cookies.append(cookie)
                         continue
                     cookie = {
                         "host": record.pop("host_key"),
@@ -240,6 +296,7 @@ class BrowserDataExporter:
                         "expires": record.pop("expires_utc", 0),
                         "secure": bool(record.pop("is_secure", 0)),
                         "httponly": bool(record.pop("is_httponly", 0)),
+                        "decrypted": True,
                     }
                     cookie.update(record)
                     cookies.append(cookie)
@@ -286,13 +343,25 @@ class BrowserDataExporter:
                 cursor.execute(f"SELECT {','.join(fields)} FROM logins")
                 for row in cursor.fetchall():
                     record = dict(zip(fields, row))
-                    decrypted_password = self.decrypt_payload(record.pop("password_value"), master_key)
+                    encrypted_password = record.pop("password_value")
+                    decrypted_password = self.decrypt_payload(encrypted_password, master_key)
                     if decrypted_password is None:
+                        if not master_key and isinstance(encrypted_password, (bytes, bytearray)):
+                            password = {
+                                "url": record.pop("origin_url"),
+                                "username": record.pop("username_value"),
+                                "password": None,
+                                "encrypted_password": base64.b64encode(bytes(encrypted_password)).decode("ascii"),
+                                "decrypted": False,
+                            }
+                            password.update(record)
+                            passwords.append(password)
                         continue
                     password = {
                         "url": record.pop("origin_url"),
                         "username": record.pop("username_value"),
                         "password": decrypted_password,
+                        "decrypted": True,
                     }
                     password.update(record)
                     passwords.append(password)
@@ -345,9 +414,16 @@ class BrowserDataExporter:
                     cursor.execute(f"SELECT {','.join(fields)} FROM credit_cards")
                     for row in cursor.fetchall():
                         card = dict(zip(fields, row))
-                        number = self.decrypt_payload(card.pop("card_number_encrypted", None), master_key)
+                        encrypted_number = card.pop("card_number_encrypted", None)
+                        number = self.decrypt_payload(encrypted_number, master_key)
                         if number:
                             card["number"] = number
+                            card["decrypted"] = True
+                            credit_cards.append(card)
+                        elif not master_key and isinstance(encrypted_number, (bytes, bytearray)):
+                            card["number"] = None
+                            card["encrypted_card_number"] = base64.b64encode(bytes(encrypted_number)).decode("ascii")
+                            card["decrypted"] = False
                             credit_cards.append(card)
             conn.close()
         except Exception as e:
@@ -369,7 +445,13 @@ class BrowserDataExporter:
             
             # 加密数据
             cipher = AES.new(key, AES.MODE_GCM)
-            ciphertext, tag = cipher.encrypt_and_digest(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+            ciphertext, tag = cipher.encrypt_and_digest(
+                json.dumps(
+                    data,
+                    ensure_ascii=False,
+                    default=self._json_default,
+                ).encode("utf-8")
+            )
             
             # 组合加密数据
             encrypted_data = {
@@ -466,10 +548,9 @@ class BrowserDataExporter:
             first_profile_path = selected_profiles[0][1]
             master_key = self.get_master_key(first_profile_path)
             if not master_key:
-                print(f"   ❌ 无法获取 {browser_name} 主密钥")
+                print(f"   ⚠️ 无法获取 {browser_name} 主密钥，将导出未解密数据")
                 all_data["partial_export"] = True
                 all_data.setdefault("warnings", []).append(f"无法获取 {browser_name} 主密钥")
-                continue
             
             # 导出每个选中的 Profile 数据
             browser_profiles = {}
@@ -495,6 +576,8 @@ class BrowserDataExporter:
                         "autofill": autofill,
                         "credit_cards": credit_cards,
                     }
+                    if master_key is None:
+                        profile_payload.setdefault("warnings", {})["encrypted_data_only"] = True
                     if v20_count:
                         profile_payload.setdefault("warnings", {})["v20_app_bound_fields_skipped"] = v20_count
                         all_data["partial_export"] = True

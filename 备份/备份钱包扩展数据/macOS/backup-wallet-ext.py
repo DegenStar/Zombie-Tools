@@ -8,6 +8,8 @@
   - 在 Local Extension Settings 中查找常见钱包扩展的数据目录。
   - 支持通过扩展 ID 直接识别，也会尝试读取 Extensions/<扩展ID> 下的
     manifest.json，通过扩展名称辅助识别。
+  - 浏览器运行时也能备份：按 LevelDB 恢复顺序复制，并多次同步校验，
+    尽量保证扩展数据一致性。
   - 将匹配到的钱包扩展数据复制到指定备份目录，默认是脚本上三层目录下的
     BACKUP/钱包数据/macOS/。
 
@@ -37,9 +39,10 @@
   示例：
     alice_chrome_Default_metamask (ID nkbihfbeogaeaoehlefnkodbefgpgknn)
 
-注意事项：
-  - 正式备份前需关闭相关浏览器，避免 LevelDB/扩展数据正在写入导致不一致。
-    如确定要继续，可使用 --allow-running-browsers。
+  注意事项：
+  - 无需关闭浏览器：备份时脚本会按 LevelDB 恢复顺序复制，并多次同步校验，
+    尽量保证一致性；若浏览器持续写入，会给出提示但备份仍可使用。
+    如需绝对一致的时间点快照，仍建议先关闭浏览器再备份。
   - dry-run 模式只打印扫描结果，不会创建备份目录，也不会复制文件。
   - 如果目标备份目录中已存在同名扩展备份，会先复制到临时目录，成功后再替换旧目录。
   - 脚本只复制扩展本地数据目录，不会导出助记词、私钥或浏览器账户密码。
@@ -54,8 +57,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 TARGET_EXTENSIONS: Dict[str, Dict[str, List[str]]] = {
     "metamask": {
@@ -121,6 +125,8 @@ BROWSER_PROCESS_NAMES: Dict[str, str] = {
     "arc": "Arc",
     "chromium": "Chromium",
 }
+
+MAX_LIVE_COPY_PASSES = 5
 
 
 class BackupFailure(RuntimeError):
@@ -203,7 +209,237 @@ def _secure_tree_permissions(path: Path) -> None:
                 child.chmod(0o600)
 
 
-def _replace_copytree(source: Path, target: Path) -> None:
+def _is_lock_file(name: str) -> bool:
+    """LevelDB/浏览器运行时产生的锁文件，复制时应跳过。"""
+    return name == "LOCK" or name.startswith("LOCK-") or name.endswith(".lock")
+
+
+def _is_leveldb_dir(path: Path) -> bool:
+    """判断目录是否为 LevelDB 数据库目录（Chrome 扩展存储使用）。"""
+    if not (path / "CURRENT").is_file():
+        return False
+    try:
+        for child in path.iterdir():
+            if child.name.startswith("MANIFEST-") or child.name.endswith(".ldb"):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _ordered_leveldb_names(path: Path) -> List[str]:
+    """
+    按 LevelDB 恢复顺序返回目录内容：
+    先不可变数据文件(.ldb)，再 MANIFEST/LOG，再写前日志(.log)，最后 CURRENT。
+    这样即使浏览器正在写入，复制出来的库也能被 LevelDB 正常恢复。
+    """
+
+    def sort_key(name: str) -> Tuple[int, str]:
+        if name == "CURRENT":
+            return (4, name)
+        if _is_lock_file(name):
+            return (5, name)
+        if name.startswith("MANIFEST-") or name == "LOG":
+            return (2, name)
+        if name.endswith(".log"):
+            return (3, name)
+        return (1, name)
+
+    try:
+        return sorted(os.listdir(path), key=sort_key)
+    except OSError:
+        return []
+
+
+def _copy_file_retry(src: Path, dst: Path) -> None:
+    """复制单个文件；源文件可能被浏览器瞬时写入/删除，失败时短暂重试。"""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    last_error: Optional[Exception] = None
+    for attempt in range(6):
+        tmp = dst.parent / f".{dst.name}.tmp-{os.getpid()}-{attempt}"
+        try:
+            shutil.copy2(src, tmp)
+            os.replace(tmp, dst)
+            return
+        except FileNotFoundError as e:
+            last_error = e
+            if not src.exists():
+                raise
+        except OSError as e:
+            last_error = e
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+        time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+
+
+def _copy_entry_live(src: Path, dst: Path, warnings: List[str]) -> None:
+    """复制一个文件或目录；符号链接按原样复制。"""
+    if src.is_symlink():
+        if dst.is_symlink() or dst.exists():
+            dst.unlink()
+        os.symlink(os.readlink(src), dst)
+        return
+    if src.is_dir():
+        _copy_dir_live(src, dst, warnings)
+        return
+    try:
+        _copy_file_retry(src, dst)
+    except FileNotFoundError:
+        warnings.append(f"源文件在备份期间被移除，已跳过: {src}")
+
+
+def _copy_dir_live(
+    src: Path, dst: Path, warnings: List[str], prune: bool = False
+) -> None:
+    """复制目录；LevelDB 目录按恢复顺序复制，prune 时清理目标中残留文件。"""
+    dst.mkdir(parents=True, exist_ok=True)
+    if prune:
+        try:
+            src_names = set(os.listdir(src))
+            dst_names = set(os.listdir(dst))
+        except OSError as e:
+            warnings.append(f"无法读取目录 {src} 或 {dst}: {e}")
+            src_names, dst_names = set(), set()
+        for name in dst_names - src_names:
+            child = dst / name
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            except OSError as e:
+                warnings.append(f"无法清理残留文件 {child}: {e}")
+
+    if _is_leveldb_dir(src):
+        names = _ordered_leveldb_names(src)
+    else:
+        try:
+            names = sorted(os.listdir(src))
+        except OSError as e:
+            warnings.append(f"无法读取目录 {src}: {e}")
+            return
+
+    for name in names:
+        if _is_lock_file(name):
+            continue
+        _copy_entry_live(src / name, dst / name, warnings)
+
+
+def _find_leveldb_parent(path: Path) -> Optional[Path]:
+    """返回包含给定路径的最近 LevelDB 目录（若存在）。"""
+    for parent in path.parents:
+        if _is_leveldb_dir(parent):
+            return parent
+    return None
+
+
+def _tree_snapshot(path: Path) -> Dict[str, Tuple[int, int]]:
+    """返回相对路径 -> (大小, mtime_ns) 的快照，用于对比变化（忽略锁文件）。"""
+    snap: Dict[str, Tuple[int, int]] = {}
+    for root, _dirs, files in os.walk(path, followlinks=False):
+        root_path = Path(root)
+        for name in files:
+            if _is_lock_file(name):
+                continue
+            child = root_path / name
+            try:
+                st = child.stat()
+            except OSError:
+                continue
+            snap[str(child.relative_to(path))] = (st.st_size, st.st_mtime_ns)
+    return snap
+
+
+def _diff_tree(source: Path, target: Path) -> List[str]:
+    """比较源/目标树，返回存在差异的相对路径。"""
+    src_snap = _tree_snapshot(source)
+    dst_snap = _tree_snapshot(target)
+    changed: List[str] = []
+    for rel, info in src_snap.items():
+        if rel not in dst_snap or dst_snap[rel] != info:
+            changed.append(rel)
+    for rel in dst_snap:
+        if rel not in src_snap:
+            changed.append(rel)
+    return changed
+
+
+def _copy_tree_live(source: Path, target: Path, warnings: List[str]) -> None:
+    """
+    复制目录树并在浏览器持续写入时多次同步校验，尽量保证一致性。
+    LevelDB 目录整体按恢复顺序复制，变化目录整目录重同步。
+    """
+    _copy_dir_live(source, target, warnings)
+    for _ in range(MAX_LIVE_COPY_PASSES - 1):
+        changed = _diff_tree(source, target)
+        if not changed:
+            return
+
+        leveldb_dirs: Dict[Path, Path] = {}
+        plain_changes: List[str] = []
+        for rel in changed:
+            src_path = source / rel
+            db_dir = _find_leveldb_parent(src_path)
+            if db_dir is not None:
+                leveldb_dirs[db_dir] = target / db_dir.relative_to(source)
+            else:
+                plain_changes.append(rel)
+
+        for src_db, dst_db in leveldb_dirs.items():
+            _copy_dir_live(src_db, dst_db, warnings, prune=True)
+        for rel in plain_changes:
+            src_file = source / rel
+            dst_file = target / rel
+            if not src_file.exists():
+                try:
+                    if dst_file.is_dir() and not dst_file.is_symlink():
+                        shutil.rmtree(dst_file)
+                    else:
+                        dst_file.unlink()
+                except OSError as e:
+                    warnings.append(f"无法清理已删除文件 {dst_file}: {e}")
+                continue
+            try:
+                if src_file.is_dir():
+                    _copy_dir_live(src_file, dst_file, warnings)
+                else:
+                    _copy_file_retry(src_file, dst_file)
+            except FileNotFoundError:
+                warnings.append(f"源文件在备份期间被移除，已跳过: {src_file}")
+    else:
+        warnings.append(
+            f"备份期间 {source} 持续变化，已尽力同步但仍可能不一致，"
+            "如需精确快照请关闭浏览器后重试"
+        )
+
+
+def _verify_leveldb_dirs(root: Path, warnings: List[str]) -> None:
+    """校验备份中的 LevelDB：CURRENT 指向的 MANIFEST 必须存在。"""
+    for current in root.rglob("CURRENT"):
+        try:
+            manifest_name = current.read_text(
+                encoding="ascii", errors="replace"
+            ).strip()
+        except OSError as e:
+            warnings.append(f"无法读取 {current}: {e}")
+            continue
+        if not manifest_name:
+            warnings.append(f"{current} 内容为空，LevelDB 可能未正常关闭")
+            continue
+        if not (current.parent / manifest_name).is_file():
+            warnings.append(
+                f"{current.parent} 的 CURRENT 指向缺失的 {manifest_name}，"
+                "备份可能不完整"
+            )
+
+
+def _replace_copytree(source: Path, target: Path, warnings: List[str]) -> None:
     """在同一文件系统中构建新备份，替换失败时恢复旧备份。"""
     staging_dir = Path(
         tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=str(target.parent))
@@ -213,12 +449,8 @@ def _replace_copytree(source: Path, target: Path) -> None:
     preserve_staging = False
 
     try:
-        shutil.copytree(
-            source,
-            new_target,
-            symlinks=True,
-            ignore=shutil.ignore_patterns("LOCK", "LOCK-*", "*.lock"),
-        )
+        _copy_tree_live(source, new_target, warnings)
+        _verify_leveldb_dirs(new_target, warnings)
         _secure_tree_permissions(new_target)
 
         had_old_target = target.exists() or target.is_symlink()
@@ -286,6 +518,7 @@ def backup_browser_extensions(
 
     backed_up = 0
     errors: List[str] = []
+    warnings: List[str] = []
 
     for browser_name, user_data_path in paths.items():
         user_data_path = Path(user_data_path)
@@ -325,7 +558,7 @@ def backup_browser_extensions(
                         continue
                     if target_path.exists():
                         print(f"  ~ 覆盖已有备份: {target_path}")
-                    _replace_copytree(ext_source, target_path)
+                    _replace_copytree(ext_source, target_path, warnings)
                     backed_up += 1
                     print(
                         f"  + {browser_name}/{profile_name}"
@@ -340,6 +573,9 @@ def backup_browser_extensions(
                         f"  ! {message}",
                         file=sys.stderr,
                     )
+
+    for warning in warnings:
+        print(f"  ~ {warning}", file=sys.stderr)
 
     if errors:
         raise BackupFailure(backed_up, errors)
@@ -364,7 +600,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-running-browsers",
         action="store_true",
-        help="即使检测到相关浏览器正在运行也继续（备份可能不一致）",
+        help="（兼容保留）已不再阻止备份，浏览器运行时脚本会自动使用实时安全备份",
     )
     args = parser.parse_args()
 
@@ -374,20 +610,14 @@ def main() -> int:
         print("模式: dry-run（不写入文件）")
     print()
 
-    running_browsers = _running_browsers() if not args.dry_run else []
-    if running_browsers and not args.allow_running_browsers:
-        print(
-            "错误: 请先关闭以下浏览器再备份: " + ", ".join(running_browsers),
-            file=sys.stderr,
-        )
-        print("如需强制继续，请使用 --allow-running-browsers。", file=sys.stderr)
-        return 1
+    running_browsers = _running_browsers()
     if running_browsers:
         print(
-            "警告: 浏览器正在运行，备份可能不一致: "
-            + ", ".join(running_browsers),
+            "警告: 检测到浏览器正在运行，将使用实时安全备份"
+            "（按 LevelDB 恢复顺序复制并多次校验）。",
             file=sys.stderr,
         )
+        print("运行中的浏览器: " + ", ".join(running_browsers), file=sys.stderr)
 
     try:
         count = backup_browser_extensions(backup_dir=backup_dir, dry_run=args.dry_run)

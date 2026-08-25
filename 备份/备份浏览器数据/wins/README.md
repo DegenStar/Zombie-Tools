@@ -1,4 +1,4 @@
-# 浏览器数据备份与恢复工具（windows版）
+# 浏览器数据备份与恢复工具（Windows 版）
 
 ## ⚠️ 重要警告
 
@@ -8,7 +8,7 @@
 2. **不要分享导出文件给任何人**
 3. **导出文件使用固定密码 `cookies2026` 加密**
 4. **使用完毕后立即删除导出文件**
-5. **不要上传到云存储或公共网络**
+5. **不要上传到公共云存储或公共网络**
 6. **妥善保管脚本文件（包含加密密码）**
 
 ---
@@ -21,7 +21,9 @@
 - 使用 AES-256-GCM 加密导出文件
 - 自动使用预设密码 `cookies2026` 加密
 - **支持浏览器运行时导出**（无需关闭浏览器）
-- 遇到 Chromium v20/App-Bound 字段时生成带警告的部分备份，并返回非零退出码
+- 优先通过 SQLite Online Backup 创建一致快照，失败时连同 WAL/SHM 文件一起复制
+- 主密钥不可用时保留可读取字段及敏感字段的 Base64 原始密文，并将文件标记为部分备份
+- 遇到 Chromium v20/App-Bound 字段或数据库读取错误时生成带警告的部分备份，并返回非零退出码
 - 支持 `--output-dir` 指定导出目录
 
 ### 2. 导入工具 (`import_browser_data.py`)
@@ -31,17 +33,20 @@
 - 自动备份现有浏览器数据
 - 支持更新已存在的条目
 - 自动填充按字段名和值覆盖；信用卡优先按 GUID 覆盖
-- **命令行参数支持**：`-l` 列出文件，`-n` 指定文件编号，`-f` 指定文件路径
-- 支持 `--exports-dir` 指定默认备份目录；`-f` 不依赖默认目录
+- 无参数运行时输入任意备份文件路径，也可使用 `-f/--file` 直接指定
+- 目标浏览器使用 APPB、无法取得 AES 主密钥时，回退到当前 Windows 用户的 DPAPI 写入
+- 仅含源端原始密文的 Cookie、密码和信用卡无法安全迁移，导入时会明确跳过并返回非零退出码
 - 数据库写入采用整批事务，任一条目失败时回滚该数据库
 
 ### 3. 转换工具 (`convert_to_txt.py`)
 - 将加密的备份文件转换为可读的 txt 文件
-- **交互式文件选择**：列出所有可用的加密文件供选择
+- 无参数运行时输入任意备份文件路径，也可使用 `-f/--file` 直接指定
 - **自动解密**：使用预设密码自动解密文件
-- **格式化输出**：将 Cookies 和密码格式化为易读的文本格式
-- 输出文件包含完整的浏览器数据信息（导出时间、用户名、各 Profile 的详细数据）
-- 支持 `-f` 直接指定文件及 `--exports-dir` 指定默认目录
+- **格式化输出**：将 Cookies、密码、自动填充和信用卡格式化为易读的文本格式
+- 输出文件包含浏览器数据信息（导出时间、用户名、各 Profile 的详细数据）
+- 显示部分备份、主密钥不可用、未解密字段及读取错误等警告
+- 默认拒绝覆盖已有同名 txt 文件；使用 `--force` 可显式覆盖
+- 在加密文件所在目录原子写入 UTF-8 BOM 格式的同名 txt 文件
 
 ---
 
@@ -51,7 +56,7 @@
 - **仅支持 Windows**（依赖 Windows DPAPI）
 
 ### Python 版本
-- Python 3.7+
+- Python 3.8+
 
 ### 依赖库
 
@@ -108,64 +113,47 @@ python export_browser_data.py
 
 4. 脚本将自动使用预设密码 `cookies2026` 加密数据
 
-5. 导出文件默认保存在仓库共享的 `BACKUP/浏览器数据/exports/` 目录，也可使用 `--output-dir` 指定，格式为：
+5. 导出文件默认保存在 `Zombie-Tools/BACKUP/浏览器数据/exports/`，也可使用 `-o/--output-dir` 指定目录，格式为：
    ```
    {用户名}_browser_data_YYYYMMDD_HHMMSS.encrypted
    ```
    例如：`zhang_browser_data_20260202_092203.encrypted`
 
 **注意**：脚本支持在浏览器运行时导出数据，使用了以下技术：
-- Windows 文件系统级复制（允许读取被锁定文件）
-- SQLite 在线备份 API（作为备用方案）
+- 优先使用 SQLite Online Backup API 创建包含 WAL 数据的一致快照
+- 在线备份失败时回退到普通文件复制，并同步可用的 WAL/SHM 旁车文件
+- 对瞬时锁冲突进行有限次数重试和超时控制
 
-如果检测到 v20/App-Bound Encryption，工具不会尝试绕过浏览器的安全机制。它会汇总跳过的字段、将文件标记为部分备份并返回非零退出码。此时请使用浏览器官方同步或迁移功能处理对应数据。
+如果无法取得浏览器主密钥，工具会保留可读取字段，并将 Cookie、密码和信用卡的原始密文以 Base64 保存用于诊断；这些原始密文不能跨用户或跨设备安全导入。如果检测到 v20/App-Bound Encryption 或发生数据库读取错误，工具不会尝试绕过浏览器安全机制，而会记录警告、将文件标记为部分备份并返回非零退出码。此时请使用浏览器官方同步或迁移功能处理缺失数据。
 
 ### 步骤 2：备份导出文件
 
-将 `exports/` 目录中的 `.encrypted` 文件**安全备份**：
+将 `Zombie-Tools/BACKUP/浏览器数据/exports/` 中的 `.encrypted` 文件**安全备份**：
 - 使用加密的 U 盘或移动硬盘
 - 或上传到**私有**加密云存储（需二次加密）
 - **不要**使用公共云盘或邮箱
 
 ### 步骤 3：在新环境导入
 
-1. 将 `.encrypted` 文件复制到新机器的 `exports/` 目录
+1. 将 `.encrypted` 文件安全复制到新机器；文件可以位于任意可访问目录
 
 2. **关闭所有浏览器窗口**（重要！）
 
-3. 运行导入脚本（支持多种方式）：
+3. 运行导入脚本：
 
-#### 方式 1：交互式选择（推荐）
+#### 方式 1：输入文件路径（推荐）
 ```bash
 python import_browser_data.py
 ```
-脚本会列出所有可用的导出文件，然后交互式选择。
+按提示输入 `.encrypted` 文件的绝对路径或相对路径；输入 `q` 可退出。
 
-#### 方式 2：列出所有文件
+#### 方式 2：通过参数指定文件路径
 ```bash
-python import_browser_data.py -l
+python import_browser_data.py -f "D:\backup\zhang_browser_data_20260202_092203.encrypted"
 # 或
-python import_browser_data.py --list
+python import_browser_data.py --file "D:\backup\zhang_browser_data_20260202_092203.encrypted"
 ```
-仅列出可用的导出文件，不执行导入。
-
-#### 方式 3：通过文件编号选择
-```bash
-python import_browser_data.py -n 1
-# 或
-python import_browser_data.py --number 1
-```
-直接指定文件编号（从列表中选择的编号）。
-
-#### 方式 4：直接指定文件路径
-```bash
-python import_browser_data.py -f exports/zhang_browser_data_20260202_092203.encrypted
-# 或
-python import_browser_data.py --file exports/zhang_browser_data_20260202_092203.encrypted
-```
-直接指定完整的文件路径（相对路径或绝对路径）。
-
-`-f/--file` 可以指向默认导出目录之外的文件。需要改变交互式列表目录时，使用 `--exports-dir DIR`。
+`-f/--file` 接受相对路径或绝对路径，不依赖默认导出目录。
 
 4. 导入流程：
    - 查看导出文件的数据统计（包含哪些 Profile 的数据）
@@ -173,6 +161,8 @@ python import_browser_data.py --file exports/zhang_browser_data_20260202_092203.
    - **选择目标浏览器和 Profile**：交互式选择要导入到的浏览器和配置文件
    - 脚本将自动使用预设密码 `cookies2026` 解密
    - 确认导入（输入 `yes`）
+   - 写入前分别备份目标 `Cookies`、`Login Data` 和 `Web Data` 数据库
+   - 若备份中存在仅含源端原始密文的字段，脚本会跳过这些字段并报告导入未完整完成
 
 5. **重启浏览器**以应用更改
 
@@ -180,34 +170,29 @@ python import_browser_data.py --file exports/zhang_browser_data_20260202_092203.
 
 如果需要查看或编辑导出的数据，可以使用转换工具：
 
-1. 运行转换脚本：
+1. 运行转换脚本并按提示输入 `.encrypted` 文件路径：
 ```bash
 python convert_to_txt.py
 ```
 
 也可以直接指定文件：
 ```bash
-python convert_to_txt.py -f D:\backup\file.encrypted
+python convert_to_txt.py -f "D:\backup\file.encrypted"
 ```
 
-2. 脚本会列出所有可用的 `.encrypted` 文件：
-   ```
-   📁 找到 3 个加密文件：
-     1. kungs_browser_data_20260208_114242.encrypted
-        大小: 1234.56 KB | 修改时间: 2026-02-08 11:42:42
-     2. zhang_browser_data_20260202_092203.encrypted
-        大小: 987.65 KB | 修改时间: 2026-02-02 09:22:03
-   ```
+2. 脚本会自动解密，并在加密文件所在目录生成同名的 `.txt` 文件
 
-3. 选择要转换的文件（输入数字）
+3. 如果同名 txt 文件已存在，脚本默认拒绝覆盖；确认需要覆盖时使用：
+```bash
+python convert_to_txt.py -f "D:\backup\file.encrypted" --force
+```
 
-4. 脚本会自动解密并生成同名的 `.txt` 文件
-
-5. 转换后的 txt 文件保存在 `exports/` 目录，包含：
+4. 转换后的 txt 文件包含：
    - 导出时间和用户名
    - 每个浏览器的 Cookies 列表（域名、名称、值、路径、过期时间等）
    - 每个浏览器的密码列表（URL、用户名、密码）
    - 每个浏览器的自动填充和本地信用卡信息
+   - 部分备份、未解密字段、v20/App-Bound 跳过项和读取错误等警告
 
 **注意**：转换后的 txt 文件包含**明文密码**，请妥善保管，使用完毕后立即删除。
 
@@ -227,9 +212,11 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 {
   "export_time": "2026-02-02 09:22:03",
   "username": "zhangxiaowei",
+  "partial_export": false,
   "browsers": {
     "Chrome": {
       "master_key": "<Base64 源浏览器主密钥>",
+      "master_key_available": true,
       "profiles": {
         "Default": {
           "cookies": [...],
@@ -266,6 +253,10 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 - 新格式使用 `profiles` 字段存储多个配置文件的数据
 - 每个 Profile 独立存储其 Cookies、密码、自动填充和信用卡信息
 - 导入时可以选择导入特定 Profile 或合并所有数据
+- `partial_export` 表示备份是否完整，具体原因记录在顶层或 Profile 的 `warnings` 中
+- 主密钥不可用时，`master_key` 为 `null`、`master_key_available` 为 `false`
+- 未能解密的 Cookie、密码和信用卡不伪装成明文；其原始密文分别保存在 `encrypted_value`、`encrypted_password` 和 `encrypted_card_number` 中（Base64）
+- 仅含原始密文的字段用于保留证据和诊断，导入器不会把绑定源用户/源设备的密文直接写入目标浏览器
 
 ---
 
@@ -274,7 +265,7 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 ### 加密密码
 - 脚本使用预设密码 `cookies2026` 自动加密/解密
 - 此密码已硬编码在脚本中，方便自动化使用
-- ⚠️ **重要**：确保导出文件的存储安全，因为密码是固定的
+- ⚠️ **重要**：固定密码不等于可靠的长期密钥管理，必须把导出文件视为高敏感数据
 
 ### 文件存储
 - **不要**将导出文件与密码存放在同一位置
@@ -294,9 +285,10 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 
 ## 故障排除
 
-### 问题 1：无法获取主密钥
-- **原因**：浏览器未安装或路径错误
-- **解决**：检查浏览器是否正确安装
+### 问题 1：无法获取主密钥或提示 APPB
+- **原因**：新版 Chromium 启用了 App-Bound Encryption，或者当前 Windows 用户无法解密 `Local State` 中的密钥
+- **结果**：导出器会保留可读取数据和部分字段的 Base64 原始密文，并生成部分备份；导入目标使用 APPB 时会回退到当前用户 DPAPI 写入可迁移的明文字段
+- **解决**：不要把部分备份视为完整迁移结果；缺失或仅含原始密文的数据应使用浏览器官方同步/迁移功能处理
 
 ### 问题 2：导入失败
 - **原因**：浏览器正在运行
@@ -317,7 +309,11 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 
 ### 问题 6：提示 v20/App-Bound 字段已跳过
 - **原因**：新版 Chromium 使用 App-Bound Encryption 保护部分敏感字段
-- **解决**：生成的文件是不完整备份；请使用浏览器官方同步或迁移功能处理这些字段
+- **解决**：生成的文件是不完整备份，导出和导入会返回非零退出码；请使用浏览器官方同步或迁移功能处理这些字段
+
+### 问题 7：转换时提示输出文件已存在
+- **原因**：转换工具默认保护已有 txt 文件，不会静默覆盖
+- **解决**：确认旧文件可以替换后，添加 `--force`
 
 ---
 
@@ -333,34 +329,37 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 **不关闭浏览器也能导出的原理**：
 
 1. **Windows 文件系统特性**
-   - Windows 允许读取被进程锁定的文件（只要有读权限）
-   - 使用二进制读取绕过某些锁定限制
+   - 在线备份失败时尝试普通文件复制或二进制复制
+   - 普通复制时同步可用的 `-wal` 和 `-shm` 旁车文件
 
 2. **SQLite 在线备份**
    - 使用 `sqlite3.Connection.backup()` API
    - 以只读模式打开数据库（`mode=ro`）
+   - 设置忙等待、总超时和有限重试
    - 不影响浏览器的正常使用
 
 3. **多重尝试机制**
-   - 优先使用直接复制（最快）
-   - 失败时使用二进制读写
-   - 最后尝试 SQLite 在线备份
+   - 优先使用 SQLite Online Backup 获取一致快照
+   - 失败时依次尝试普通复制和二进制复制
+   - 所有读取失败都会进入备份警告，不会静默宣称完整成功
 
 **注意**：虽然支持在线导出，但数据可能略有延迟（浏览器可能还在写入新数据）
 
 ### 导出加密流程
 1. 从浏览器数据库读取加密数据
 2. 使用 **源用户的 DPAPI** 解密主密钥
-3. 使用主密钥解密 Cookies 和密码为**明文**
+3. 使用主密钥解密 Cookies、密码和本地信用卡等敏感字段为**明文**
 4. 使用预设密码 `cookies2026`（PBKDF2 + AES-256-GCM）加密导出文件
+
+主密钥不可用时，第 2、3 步不能完整执行。工具会保留原始密文并标记部分备份，但不会绕过 APPB；这些原始密文通常仍绑定源用户或源设备。
 
 ### 导入流程
 1. 使用密码 `cookies2026` 解密导出文件（获得明文数据）
 2. 获取**目标用户的**浏览器主密钥（使用目标用户的 DPAPI）
-3. 使用目标主密钥**重新加密**数据
+3. 使用目标主密钥**重新加密**数据；目标 APPB 主密钥不可用时使用当前用户 DPAPI
 4. 写入目标浏览器数据库
 
-**关键点**：脚本在中间环节将数据转换为明文，因此不受 DPAPI 用户绑定限制
+**关键点**：只有成功导出为明文的数据才能跨用户或跨设备重新加密。仅含源端原始密文的字段会被跳过，不能靠复制密文解除 DPAPI/APPB 绑定。
 
 ---
 
@@ -381,7 +380,7 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 
 ### 跨用户账户支持
 
-**✅ 本脚本支持跨 Windows 用户账户使用**
+**✅ 对成功解密为明文的数据，本脚本支持跨 Windows 用户账户使用**
 
 **原理说明**：
 1. **导出阶段**：在用户 A 的账户下解密 Cookies 和密码为明文
@@ -400,6 +399,8 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 ### 已知限制
 - 部分网站可能需要重新登录（Cookie 过期或额外验证机制）
 - 导入后首次使用可能需要重新验证某些敏感操作
+- 部分备份中仅含源端原始密文的 Cookie、密码和信用卡不会被导入
+- 不支持绕过 Chromium v20/App-Bound Encryption
 
 ---
 
@@ -414,28 +415,35 @@ python convert_to_txt.py -f D:\backup\file.encrypted
 
 ## 命令行参数参考
 
+### 导出工具 (`export_browser_data.py`)
+
+| 参数 | 简写 | 说明 | 示例 |
+|------|------|------|------|
+| `--output-dir` | `-o` | 指定加密备份的输出目录 | `-o "D:\backup"` |
+
 ### 导入工具 (`import_browser_data.py`)
 
 | 参数 | 简写 | 说明 | 示例 |
 |------|------|------|------|
-| `--file` | `-f` | 直接指定要导入的文件路径 | `-f exports/file.encrypted` |
-| `--number` | `-n` | 通过文件编号选择文件 | `-n 1` |
-| `--list` | `-l` | 仅列出可用的导出文件 | `-l` |
-| `--exports-dir` |  | 指定交互式列表使用的默认目录 | `--exports-dir D:\backup` |
+| `--file` | `-f` | 直接指定要导入的文件路径 | `-f "D:\backup\file.encrypted"` |
+
+### 转换工具 (`convert_to_txt.py`)
+
+| 参数 | 简写 | 说明 | 示例 |
+|------|------|------|------|
+| `--file` | `-f` | 直接指定要转换的文件路径 | `-f "D:\backup\file.encrypted"` |
+| `--force` |  | 覆盖已存在的同名 txt 文件 | `--force` |
 
 **使用示例**：
 ```bash
 # 查看帮助
 python import_browser_data.py -h
 
-# 列出所有文件
-python import_browser_data.py -l
-
-# 使用文件编号导入
-python import_browser_data.py -n 1
-
 # 使用文件路径导入
-python import_browser_data.py -f exports/zhang_browser_data_20260202_092203.encrypted
+python import_browser_data.py -f "D:\backup\zhang_browser_data_20260202_092203.encrypted"
+
+# 转换并显式覆盖同名 txt
+python convert_to_txt.py -f "D:\backup\zhang_browser_data_20260202_092203.encrypted" --force
 ```
 
 ---
@@ -443,21 +451,33 @@ python import_browser_data.py -f exports/zhang_browser_data_20260202_092203.encr
 ## 相关文件
 
 ```
-备份浏览器cookies和密码/
-├── README.md                   # 本文档
-├── export_browser_data.py      # 导出工具（支持多 Profile）
-├── import_browser_data.py      # 导入工具（支持多 Profile，命令行参数）
-├── convert_to_txt.py           # 转换工具（将加密文件转为 txt）
-└── browser_utils.py            # 公共路径、控制台输出和备份校验
+Zombie-Tools/
+├── 备份/备份浏览器数据/wins/
+│   ├── README.md                   # 本文档
+│   ├── export_browser_data.py      # 导出工具（支持多 Profile）
+│   ├── import_browser_data.py      # 导入工具（支持多 Profile）
+│   ├── convert_to_txt.py           # 将加密文件转换为 txt
+│   ├── browser_utils.py            # 控制台输出和备份校验等公共逻辑
+│   ├── requirements.txt            # Windows Python 依赖
+│   └── tests/                      # 回归测试和真实浏览器集成测试
+└── BACKUP/浏览器数据/exports/      # 默认导出目录（首次导出时创建）
+    └── {用户名}_browser_data_*.encrypted
 
-BACKUP/浏览器数据/exports/      # 默认导出目录（首次导出时创建）
-    ├── {用户名}_browser_data_*.encrypted  # 加密备份文件
-    └── {用户名}_browser_data_*.txt         # 转换后的文本文件（可选）
+任意输入文件所在目录/
+└── *.txt                            # 转换工具生成的同名明文文件
 ```
 
 ---
 
 ## 更新日志
+
+### v2.2.0 (2026-08-25)
+- 导入和转换改为直接输入任意备份文件路径，移除目录扫描、编号选择和 `--exports-dir`
+- 转换工具新增 `--force`，默认拒绝覆盖，并采用原子写入
+- 主密钥不可用时保留 Base64 原始密文并明确标记部分备份
+- 导入器跳过无法安全迁移的源端密文；目标 APPB 环境回退到当前用户 DPAPI
+- 在线导出优先使用 SQLite 一致快照，复制回退同步 WAL/SHM 文件
+- 增强备份外层结构、解密后数据结构和文件大小校验
 
 ### v2.1.0 (2026-02-08)
 - ✨ **新增**：`convert_to_txt.py` 转换工具
