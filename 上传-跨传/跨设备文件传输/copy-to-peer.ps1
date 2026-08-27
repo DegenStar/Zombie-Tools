@@ -25,6 +25,7 @@ param(
     [string]$Src,
     [string]$Dst,
     [string]$User,
+    [ValidateRange(1, 65535)]
     [int]$Port = 22,
     [switch]$List,
     [switch]$Scp,
@@ -159,6 +160,14 @@ function ConvertTo-RemotePath {
     return (& $esc $Path)
 }
 
+# OpenSSH 9.x 的 scp 默认使用 SFTP，远端路径不会再经过远端 shell。
+# 因此不能添加 shell 引号；Windows SFTP 路径统一使用正斜杠。
+function ConvertTo-ScpRemotePath {
+    param([string]$Path, [bool]$RemoteIsWindows)
+    if ($RemoteIsWindows) { return $Path.Replace([char]92, [char]47) }
+    return $Path
+}
+
 # ---------------------------------------------------------------------------
 # Tailscale: 定位 CLI 与枚举设备
 # ---------------------------------------------------------------------------
@@ -184,9 +193,24 @@ function Test-TailscaleIPv4 {
 # 解析 tailscale status --json 的 Peer 映射, 排除本机, 在线设备排前面
 function Get-TailnetPeer {
     param([string]$TailscaleExe)
-    $raw = & $TailscaleExe status --json 2>$null
-    if (-not $raw) { return @() }
-    try { $status = ($raw | Out-String) | ConvertFrom-Json } catch { return @() }
+    $script:TailscaleStatusFailed = $false
+    $oldErrorAction = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 会把原生命令 stderr 包装成 ErrorRecord。
+        $ErrorActionPreference = 'Continue'
+        $raw = & $TailscaleExe status --json 2>$null
+        $statusExitCode = $LASTEXITCODE
+    } catch {
+        $statusExitCode = 1
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
+    if ($statusExitCode -ne 0 -or -not $raw) {
+        $script:TailscaleStatusFailed = $true
+        return @()
+    }
+    try { $status = ($raw | Out-String) | ConvertFrom-Json }
+    catch { $script:TailscaleStatusFailed = $true; return @() }
     if (-not $status.Peer) { return @() }
 
     $peers = @()
@@ -279,6 +303,21 @@ function Test-TcpReachable {
     }
 }
 
+function Invoke-QuietNative {
+    param([scriptblock]$Command)
+    $oldErrorAction = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 会把原生命令 stderr 包装成 ErrorRecord。
+        $ErrorActionPreference = 'Continue'
+        $null = & $Command 2>$null
+        return $LASTEXITCODE
+    } catch {
+        return 1
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
+}
+
 function Invoke-Preflight {
     param([object]$Peer, [string]$UserName, [int]$TcpPort)
     Write-Section '传输前体检'
@@ -296,15 +335,17 @@ function Invoke-Preflight {
         Write-Check warn '目标设备在线状态' '离线 (仍会尝试连接, 大概率超时)'
     }
 
-    if (Test-TcpReachable $Peer.Ip $TcpPort) {
+    $portReachable = Test-TcpReachable $Peer.Ip $TcpPort
+    if ($portReachable) {
         Write-Check ok "目标 $TcpPort 端口可达" "$($Peer.Ip):$TcpPort"
     } else {
         Write-Check fail "目标 $TcpPort 端口可达" "无法连接 $($Peer.Ip):$TcpPort, 确认目标机 sshd 已启动"
     }
 
     # 免密登录是整个流程的前提: 失败时给出明确的修复指引
-    $null = & ssh @script:SshProbeOpts -p $TcpPort "$UserName@$($Peer.Ip)" 'exit 0' 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    if (-not $portReachable) {
+        Write-Check fail '免密登录 (公钥认证)' '因 SSH 端口不可达, 跳过登录探测'
+    } elseif ((Invoke-QuietNative { & ssh @script:SshProbeOpts -p $TcpPort "$UserName@$($Peer.Ip)" 'exit 0' }) -eq 0) {
         Write-Check ok '免密登录 (公钥认证)' "$UserName@$($Peer.Ip)"
     } else {
         Write-Check fail '免密登录 (公钥认证)' "以 $UserName 身份登录失败"
@@ -317,8 +358,7 @@ function Invoke-Preflight {
         $script:RemoteHasRsync = $false
         Write-Check info '远端 rsync' 'Windows 目标, 使用 scp'
     } else {
-        $null = & ssh @script:SshProbeOpts -p $TcpPort "$UserName@$($Peer.Ip)" 'command -v rsync' 2>$null
-        $script:RemoteHasRsync = ($LASTEXITCODE -eq 0)
+        $script:RemoteHasRsync = $portReachable -and ((Invoke-QuietNative { & ssh @script:SshProbeOpts -p $TcpPort "$UserName@$($Peer.Ip)" 'command -v rsync' }) -eq 0)
         if ($script:RemoteHasRsync) {
             Write-Check ok '远端 rsync' '可用'
         } else {
@@ -342,6 +382,11 @@ function Resolve-SourcePath {
     if (-not $item) { return $null }
 
     $isDir = $item.PSIsContainer
+    $fullName = $item.FullName
+    $root = [IO.Path]::GetPathRoot($fullName)
+    if ($fullName.Length -gt $root.Length) {
+        $null = $fullName = $fullName.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar))
+    }
     if ($isDir) {
         $files = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -File -ErrorAction SilentlyContinue)
         $bytes = ($files | Measure-Object -Property Length -Sum).Sum
@@ -353,7 +398,7 @@ function Resolve-SourcePath {
     if (-not $bytes) { $bytes = 0 }
 
     return [pscustomobject]@{
-        FullName = $item.FullName
+        FullName = $fullName
         IsDir    = $isDir
         Count    = $count
         Size     = (Format-ByteSize $bytes)
@@ -391,6 +436,9 @@ function Invoke-CopyToPeer {
     if (-not $ts) { Stop-WithError '未找到 tailscale.exe, 请先运行 SETUP.ps1 安装 Tailscale。' }
 
     $peers = Get-TailnetPeer -TailscaleExe $ts
+    if ($script:TailscaleStatusFailed) {
+        Stop-WithError '无法读取 Tailscale 状态。请确认服务已运行且当前账户有访问权限；必要时以管理员身份运行。'
+    }
     if ($peers.Count -eq 0) {
         Stop-WithError 'tailnet 内没有发现其它设备, 请确认设备 B 已加入同一 tailnet。'
     }
@@ -515,8 +563,9 @@ function Invoke-CopyToPeer {
         if ($DryRun) { $argv = @('-n') + $argv }
     } else {
         $exe  = 'scp'
+        $scpDestinationPath = ConvertTo-ScpRemotePath -Path $destination -RemoteIsWindows $script:RemoteIsWindows
         $argv = @('-r', '-P', "$Port", '-o', 'StrictHostKeyChecking=accept-new',
-                  $source.FullName, ($target + (ConvertTo-RemotePath $destination)))
+                  $source.FullName, ($target + $scpDestinationPath))
     }
 
     Write-Host ''
@@ -531,7 +580,7 @@ function Invoke-CopyToPeer {
     }
 
     # --- 远端建目录 (仅当目标以 / 结尾, 明确是目录时) ---
-    if ($destination.EndsWith('/') -and -not $DryRun) {
+    if (($destination.EndsWith('/') -or $destination.EndsWith([char]92)) -and -not $DryRun) {
         if ($script:RemoteIsWindows) {
             # 用 -EncodedCommand 传递完整脚本，目标路径不参与 cmd.exe / PowerShell 的
             # 命令行解析；-LiteralPath 同时避免 []、* 等字符被当作通配符。
