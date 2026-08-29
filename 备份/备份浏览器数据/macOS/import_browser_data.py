@@ -307,8 +307,79 @@ class BrowserDataImporter:
             except OSError:
                 pass
             raise
+
+    @staticmethod
+    def restore_sqlite_database(backup_path, database_path):
+        """从 Online Backup 副本恢复数据库。"""
+        with closing(sqlite3.connect(sqlite_readonly_uri(backup_path), uri=True)) as source:
+            with closing(sqlite3.connect(database_path)) as destination:
+                source.backup(destination)
+
+    def clear_target_profile_data(self, browser_name, browser_path):
+        """备份并清空目标 Profile 中本工具支持的数据。"""
+        cookies_path = os.path.join(browser_path, "Network", "Cookies")
+        if not os.path.exists(cookies_path):
+            cookies_path = os.path.join(browser_path, "Cookies")
+
+        databases = (
+            ("cookies", cookies_path, ("cookies",)),
+            ("passwords", os.path.join(browser_path, "Login Data"), ("logins",)),
+            (
+                "web_data",
+                os.path.join(browser_path, "Web Data"),
+                ("autofill", "credit_cards"),
+            ),
+        )
+        existing_databases = [item for item in databases if os.path.exists(item[1])]
+        backups = {}
+
+        # 必须先完成全部备份，避免备份失败时已经删除了部分数据。
+        try:
+            for key, database_path, _tables in existing_databases:
+                backups[key] = str(self.backup_sqlite_database(database_path))
+        except Exception as error:
+            print(f"   ❌ {browser_name} 原数据备份失败，已中止清空: {error}")
+            return None
+
+        deleted = {"cookies": 0, "passwords": 0, "autofill": 0, "credit_cards": 0}
+        try:
+            for _key, database_path, tables in existing_databases:
+                with closing(sqlite3.connect(database_path, timeout=30.0)) as conn, conn:
+                    cursor = conn.cursor()
+                    for table in tables:
+                        cursor.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                            (table,),
+                        )
+                        if cursor.fetchone():
+                            cursor.execute(f"DELETE FROM {table}")
+                            deleted[table if table != "logins" else "passwords"] += cursor.rowcount
+        except Exception as error:
+            restore_errors = []
+            for key, database_path, _tables in existing_databases:
+                try:
+                    self.restore_sqlite_database(backups[key], database_path)
+                except Exception as restore_error:
+                    restore_errors.append(f"{database_path}: {restore_error}")
+            print(f"   ❌ 清空 {browser_name} 原数据失败: {error}")
+            if restore_errors:
+                print("   ⚠️  自动恢复失败，请使用备份手动恢复：")
+                for restore_error in restore_errors:
+                    print(f"      {restore_error}")
+            else:
+                print("   ✅ 已从备份恢复目标配置文件")
+            return None
+
+        print("   🧹 已清空目标配置文件的原数据：")
+        print(f"      🍪 Cookies: {deleted['cookies']:,} 个")
+        print(f"      🔑 密码: {deleted['passwords']:,} 个")
+        print(f"      📝 自动填充: {deleted['autofill']:,} 项")
+        print(f"      💳 信用卡: {deleted['credit_cards']:,} 张")
+        return backups
     
-    def import_cookies(self, browser_name, browser_path, cookies, master_key):
+    def import_cookies(
+        self, browser_name, browser_path, cookies, master_key, backup_path=None
+    ):
         """导入 Cookies"""
         cookies_path = os.path.join(browser_path, "Network", "Cookies")
         if not os.path.exists(cookies_path):
@@ -318,11 +389,12 @@ class BrowserDataImporter:
             print(f"   ❌ Cookies 文件不存在")
             return ImportResult(len(cookies), 0, len(cookies))
 
-        try:
-            backup_path = self.backup_sqlite_database(cookies_path)
-        except Exception as error:
-            print(f"   ❌ Cookies 备份失败，已中止导入: {error}")
-            return ImportResult(len(cookies), 0, len(cookies))
+        if backup_path is None:
+            try:
+                backup_path = self.backup_sqlite_database(cookies_path)
+            except Exception as error:
+                print(f"   ❌ Cookies 备份失败，已中止导入: {error}")
+                return ImportResult(len(cookies), 0, len(cookies))
 
         succeeded = 0
         try:
@@ -402,18 +474,21 @@ class BrowserDataImporter:
         print(f"   {'✅' if failed == 0 else '⚠️ '} Cookies: {succeeded:,}/{len(cookies):,}")
         return ImportResult(len(cookies), succeeded, failed, str(backup_path))
     
-    def import_passwords(self, browser_name, browser_path, passwords, master_key):
+    def import_passwords(
+        self, browser_name, browser_path, passwords, master_key, backup_path=None
+    ):
         """导入密码"""
         login_data_path = os.path.join(browser_path, "Login Data")
         if not os.path.exists(login_data_path):
             print(f"   ❌ Login Data 文件不存在")
             return ImportResult(len(passwords), 0, len(passwords))
 
-        try:
-            backup_path = self.backup_sqlite_database(login_data_path)
-        except Exception as error:
-            print(f"   ❌ Login Data 备份失败，已中止导入: {error}")
-            return ImportResult(len(passwords), 0, len(passwords))
+        if backup_path is None:
+            try:
+                backup_path = self.backup_sqlite_database(login_data_path)
+            except Exception as error:
+                print(f"   ❌ Login Data 备份失败，已中止导入: {error}")
+                return ImportResult(len(passwords), 0, len(passwords))
 
         succeeded = 0
         try:
@@ -490,7 +565,10 @@ class BrowserDataImporter:
         print(f"   {'✅' if failed == 0 else '⚠️ '} 密码: {succeeded:,}/{len(passwords):,}")
         return ImportResult(len(passwords), succeeded, failed, str(backup_path))
 
-    def import_web_data(self, browser_name, browser_path, autofill, credit_cards, master_key):
+    def import_web_data(
+        self, browser_name, browser_path, autofill, credit_cards, master_key,
+        backup_path=None,
+    ):
         """导入自动填充和信用卡，使用目标浏览器密钥重新加密卡号。"""
         requested = len(autofill) + len(credit_cards)
         web_data_path = os.path.join(browser_path, "Web Data")
@@ -498,11 +576,12 @@ class BrowserDataImporter:
             print("   ❌ Web Data 文件不存在")
             return ImportResult(requested, 0, requested)
 
-        try:
-            backup_path = self.backup_sqlite_database(web_data_path)
-        except Exception as error:
-            print(f"   ❌ Web Data 备份失败，已中止导入: {error}")
-            return ImportResult(requested, 0, requested)
+        if backup_path is None:
+            try:
+                backup_path = self.backup_sqlite_database(web_data_path)
+            except Exception as error:
+                print(f"   ❌ Web Data 备份失败，已中止导入: {error}")
+                return ImportResult(requested, 0, requested)
 
         try:
             with closing(sqlite3.connect(web_data_path, timeout=30.0)) as conn, conn:
@@ -674,6 +753,7 @@ class BrowserDataImporter:
         print("  • 关闭所有浏览器窗口")
         print("  • 已备份当前浏览器数据")
         print("  • 确认导入文件来源可信")
+        print("  • 目标配置的 Cookies、密码、自动填充和信用卡会先被清空")
         print("-"*60)
         
         if not os.path.exists(import_file):
@@ -747,8 +827,8 @@ class BrowserDataImporter:
                 print(f"    💳 信用卡: {credit_cards_count:,} 张")
         
         print()
-        confirm = input("是否继续导入？(yes/no): ").strip().lower()
-        if confirm != 'yes':
+        confirm = input("是否继续导入？(y/n，默认 y): ").strip().lower()
+        if confirm not in ("", "y"):
             print("❌ 已取消导入")
             return True
         print()
@@ -986,25 +1066,44 @@ class BrowserDataImporter:
             print(f"   🔑 密码: {len(passwords):,} 个")
             print(f"   📝 自动填充: {len(autofill):,} 项")
             print(f"   💳 信用卡: {len(credit_cards):,} 张")
+
+            print(f"\n💾 正在备份并清空 {browser_name} - {selected_profile_name} 的原数据...")
+            original_backups = self.clear_target_profile_data(browser_name, browser_path)
+            if original_backups is None:
+                overall_success = False
+                continue
+            if original_backups:
+                print("   🛡️  原数据备份：")
+                for backup_path in original_backups.values():
+                    print(f"      {backup_path}")
             
             results = []
             if cookies:
-                results.append(self.import_cookies(browser_name, browser_path, cookies, master_key))
+                results.append(self.import_cookies(
+                    browser_name, browser_path, cookies, master_key,
+                    original_backups.get("cookies"),
+                ))
             else:
                 print(f"   ⏭️  没有 Cookies 数据需要导入")
             
             if passwords:
-                results.append(self.import_passwords(browser_name, browser_path, passwords, master_key))
+                results.append(self.import_passwords(
+                    browser_name, browser_path, passwords, master_key,
+                    original_backups.get("passwords"),
+                ))
             else:
                 print(f"   ⏭️  没有密码数据需要导入")
 
             if autofill or credit_cards:
-                results.append(self.import_web_data(browser_name, browser_path, autofill, credit_cards, master_key))
+                results.append(self.import_web_data(
+                    browser_name, browser_path, autofill, credit_cards, master_key,
+                    original_backups.get("web_data"),
+                ))
             else:
                 print(f"   ⏭️  没有自动填充或信用卡数据需要导入")
 
             processed_browser = True
-            profile_success = bool(results) and all(result.ok for result in results)
+            profile_success = all(result.ok for result in results)
             if profile_success:
                 imported_profiles.append((browser_name, selected_profile_name, browser_path))
             else:

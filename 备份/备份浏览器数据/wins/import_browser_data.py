@@ -54,7 +54,7 @@ class BrowserDataImporter:
     
     def __init__(self):
         self.browsers = {
-            "Chrome": os.path.join(os.environ['LOCALAPPDATA'], "Google", "Chrome", "User Data"),
+            "Chrome": r"D:\ChromeData",
             "Edge": os.path.join(os.environ['LOCALAPPDATA'], "Microsoft", "Edge", "User Data"),
             "Brave": os.path.join(os.environ['LOCALAPPDATA'], "BraveSoftware", "Brave-Browser", "User Data"),
         }
@@ -306,6 +306,81 @@ class BrowserDataImporter:
                 destination.close()
             if source is not None:
                 source.close()
+
+    @staticmethod
+    def _table_exists(cursor, table):
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        )
+        return cursor.fetchone() is not None
+
+    def clear_target_profile_data(self, browser_name, browser_path):
+        """Back up and clear the browser data managed by this importer."""
+        cookies_path = os.path.join(browser_path, "Network", "Cookies")
+        if not os.path.exists(cookies_path):
+            cookies_path = os.path.join(browser_path, "Cookies")
+
+        targets = (
+            ("Cookies", cookies_path, ("cookies",)),
+            (
+                "密码",
+                os.path.join(browser_path, "Login Data"),
+                ("insecure_credentials", "password_notes", "logins"),
+            ),
+            (
+                "自动填充/信用卡",
+                os.path.join(browser_path, "Web Data"),
+                ("autofill", "credit_cards"),
+            ),
+        )
+        existing_targets = [target for target in targets if os.path.exists(target[1])]
+        if not existing_targets:
+            print(f"   ❌ {browser_name} 未找到可清理的目标数据库")
+            return False
+
+        backups = []
+        for label, database_path, _ in existing_targets:
+            backup_path = self._backup_database(database_path)
+            if not backup_path:
+                print(f"   ❌ {browser_name} {label} 数据库备份失败，已取消清理和导入")
+                return False
+            backups.append(backup_path)
+
+        connections = []
+        deleted = {}
+        try:
+            for label, database_path, tables in existing_targets:
+                conn = sqlite3.connect(database_path, timeout=30.0)
+                connections.append(conn)
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+                deleted[label] = 0
+                for table in tables:
+                    if not self._table_exists(cursor, table):
+                        continue
+                    cursor.execute(f"DELETE FROM {table}")
+                    deleted[label] += max(cursor.rowcount, 0)
+
+            for conn in connections:
+                conn.commit()
+        except Exception as exc:
+            for conn in connections:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
+            print(f"   ❌ 清理 {browser_name} 目标数据失败，已取消导入: {exc}")
+            return False
+        finally:
+            for conn in connections:
+                conn.close()
+
+        print("\n🧹 已清空目标 Profile 的现有数据：")
+        for label, _, _ in existing_targets:
+            print(f"   • {label}: {deleted[label]:,} 条")
+        print(f"   • 已创建 {len(backups)} 个导入前数据库备份")
+        return True
 
     def _cookie_values(self, cookie, encrypted_value):
         expires_utc = int(cookie.get("expires", 0))
@@ -829,8 +904,8 @@ class BrowserDataImporter:
         
         # 确认导入
         print()
-        confirm = input("是否继续导入？(yes/no): ").strip().lower()
-        if confirm != 'yes':
+        confirm = input("是否继续导入？(y/n，默认 y): ").strip().lower() or "y"
+        if confirm != "y":
             print("❌ 已取消导入")
             return False
         print()
@@ -961,6 +1036,11 @@ class BrowserDataImporter:
             print(f"   🔑 密码: {len(passwords):,} 个")
             print(f"   📝 自动填充: {len(autofill):,} 项")
             print(f"   💳 信用卡: {len(credit_cards):,} 张")
+
+            # 导入采用替换语义：先清空目标 Profile 中本工具管理的数据。
+            if not self.clear_target_profile_data(browser_name, browser_path):
+                overall_success = False
+                continue
             
             # 导入 Cookies
             cookie_ok = True

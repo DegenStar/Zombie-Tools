@@ -78,10 +78,7 @@ TARGET_EXTENSIONS: Dict[str, Dict[str, List[str]]] = {
     },
     "phantom": {
         "names": ["Phantom"],
-        "ids": [
-            "bfnaelmomeimhlpmgjnjophhpkkoljpa",
-            "phkbamefinggmakgklpkljjmgibohnba",
-        ],
+        "ids": ["bfnaelmomeimhlpmgjnjophhpkkoljpa"],
     },
     "rainbow": {
         "names": ["Rainbow"],
