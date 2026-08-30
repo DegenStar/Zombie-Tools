@@ -43,7 +43,25 @@ OS_TYPE=$(uname -s)
 OPT_TO=""; OPT_SRC=""; OPT_DST=""; OPT_USER=""; OPT_PORT="22"
 DO_LIST=0; FORCE_SCP=0; DRY_RUN=0; ASSUME_YES=0; USE_COLOR=1
 
-usage() { sed -n '2,45p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; }
+usage() {
+    printf '%s\n' \
+        '用法: copy-to-peer.sh [选项]' \
+        '' \
+        '向 Tailnet 内的另一台设备复制文件 / 目录（Linux / macOS / WSL）' \
+        '' \
+        '选项:' \
+        '  --to <主机名|IP>   目标设备（跳过设备选择菜单）' \
+        '  --src <路径>       源文件或目录（本机）' \
+        '  --dst <路径>       目标路径（远端）' \
+        '  --user <用户>      远端登录用户名' \
+        '  --port <端口>      远端 SSH 端口（默认 22）' \
+        '  --list             仅列出 Tailnet 设备' \
+        '  --scp              强制使用 scp，不使用 rsync' \
+        '  --dry-run          演练，不实际写入远端' \
+        '  --yes, -y          跳过最终确认' \
+        '  --no-color         禁用彩色输出' \
+        '  --help, -h         显示此帮助'
+}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -65,7 +83,7 @@ while [ "$#" -gt 0 ]; do
         --yes|-y)   ASSUME_YES=1; shift ;;
         --no-color) USE_COLOR=0;  shift ;;
         --help|-h)  usage; exit 0 ;;
-        *)          printf '未知参数: %s (用 --help 查看用法)\n' "$1" >&2; exit 2 ;;
+        *)          printf '未知参数: %s（运行 --help 查看帮助）\n' "$1" >&2; exit 2 ;;
     esac
 done
 
@@ -83,6 +101,19 @@ else
     C_RESET=''; C_DIM=''; C_BOLD=''
     C_GREEN=''; C_RED=''; C_YELLOW=''; C_CYAN=''; C_BLUE=''; C_GRAY=''
 fi
+USE_UNICODE=1
+[ -t 1 ] || USE_UNICODE=0
+case "${TERM:-}" in dumb|"") USE_UNICODE=0;; esac
+case "${LC_ALL:-${LANG:-C}}" in *UTF-8*|*utf-8*|*UTF8*|*utf8*) ;; *) USE_UNICODE=0;; esac
+if [ "$USE_UNICODE" -eq 1 ]; then
+    U_OK='✔'; U_FAIL='✘'; U_WARN='⚠'; U_INFO='ℹ'; U_STEP='▶'; U_ARROW='➜'
+    U_ONLINE='●'; U_OFFLINE='○'; U_DOT='·'; U_SEND='📤'
+    R_H='─'; R_TL='╭'; R_TR='╮'; R_BL='╰'; R_BR='╯'; R_LT='├'; R_RT='┤'; R_V='│'
+else
+    U_OK='OK'; U_FAIL='X'; U_WARN='!'; U_INFO='i'; U_STEP='>'; U_ARROW='>'
+    U_ONLINE=''; U_OFFLINE=''; U_DOT='-'; U_SEND=''
+    R_H='-'; R_TL='+'; R_TR='+'; R_BL='+'; R_BR='+'; R_LT='+'; R_RT='+'; R_V='|'
+fi
 
 PASS_N=0; FAIL_N=0; WARN_N=0
 WIDTH=64
@@ -90,7 +121,7 @@ WIDTH=64
 _rule() {
     local l="$1" r="$3" i
     printf '%s%s' "$C_GRAY" "$l"
-    for ((i=0; i<WIDTH; i++)); do printf '─'; done
+    for ((i=0; i<WIDTH; i++)); do printf '%s' "$R_H"; done
     printf '%s%s\n' "$r" "$C_RESET"
 }
 
@@ -116,40 +147,41 @@ _bar_text() {
     dw="$(_disp_width "$text")"
     pad=$((WIDTH - 1 - dw))
     [ "$pad" -lt 0 ] && pad=0
-    printf '%s│%s %s' "$C_GRAY" "$C_RESET" "$text"
+    printf '%s%s%s %s' "$C_GRAY" "$R_V" "$C_RESET" "$text"
     printf '%*s' "$pad" ''
-    printf '%s│%s\n' "$C_GRAY" "$C_RESET"
+    printf '%s%s%s\n' "$C_GRAY" "$R_V" "$C_RESET"
 }
 
 banner() {
     local title="$1" sub="$2"
     echo
-    _rule '╭' '' '╮'
-    _bar_text "${C_BOLD}${C_CYAN}${title}${C_RESET}"
+    _rule "$R_TL" '' "$R_TR"
+    _bar_text "${C_BOLD}${C_CYAN}${U_SEND} ${title}${C_RESET}"
     [ -n "$sub" ] && _bar_text "${C_GRAY}${sub}${C_RESET}"
-    _rule '╰' '' '╯'
+    _rule "$R_BL" '' "$R_BR"
     echo
 }
 
 section() {
     echo
     printf '%s%s  %s%s\n' "$C_BOLD" "$C_BLUE" "$1" "$C_RESET"
-    _rule '├' '' '┤'
+    _rule "$R_LT" '' "$R_RT"
 }
 
 check_line() {
     local status="$1" label="$2" detail="${3:-}"
-    local icon color
+    local icon color iw
     case "$status" in
-        ok)   icon='✔'; color="$C_GREEN";  PASS_N=$((PASS_N+1)) ;;
-        fail) icon='✗'; color="$C_RED";    FAIL_N=$((FAIL_N+1)) ;;
-        warn) icon='!'; color="$C_YELLOW"; WARN_N=$((WARN_N+1)) ;;
-        info) icon='·'; color="$C_CYAN" ;;
-        *)    icon='·'; color="$C_RESET" ;;
+        ok)   icon="$U_OK";   color="$C_GREEN";  PASS_N=$((PASS_N+1)) ;;
+        fail) icon="$U_FAIL"; color="$C_RED";    FAIL_N=$((FAIL_N+1)) ;;
+        warn) icon="$U_WARN"; color="$C_YELLOW"; WARN_N=$((WARN_N+1)) ;;
+        info) icon="$U_DOT";  color="$C_CYAN" ;;
+        *)    icon="$U_DOT";  color="$C_RESET" ;;
     esac
+    case "$icon" in 'OK') iw=2;; '✔'|'✘'|'ℹ'|'·'|'!'|'X'|'-') iw=1;; *) iw=2;; esac
     local dw pad
     dw="$(_disp_width "$label")"
-    pad=$((26 - dw))
+    pad=$((26 - dw - iw))
     [ "$pad" -lt 0 ] && pad=0
     printf '  %s%s%s  %s' "$color" "$icon" "$C_RESET" "$label"
     printf '%*s' "$pad" ''
@@ -160,15 +192,22 @@ check_line() {
     fi
 }
 
-die() { printf '\n%s[ERROR]%s %s\n\n' "$C_RED" "$C_RESET" "$1" >&2; exit 1; }
+die() { printf '\n  %s%s%s %s\n\n' "$C_RED" "$U_FAIL" "$C_RESET" "$1" >&2; exit 1; }
+ok()   { printf '  %s%s%s %s\n' "$C_GREEN" "$U_OK" "$C_RESET" "$1"; }
+warn() { printf '  %s%s%s %s\n' "$C_YELLOW" "$U_WARN" "$C_RESET" "$1"; }
+info() { printf '  %s%s%s %s\n' "$C_CYAN" "$U_INFO" "$C_RESET" "$1"; }
+step() { printf '  %s%s%s %s\n' "$C_BLUE" "$U_STEP" "$C_RESET" "$1"; }
 
 # 交互式读取: 脚本可能被管道调用, 优先直接读终端
 _ask() {
-    local prompt="$1" default="${2:-}" reply=""
+    local prompt="$1" default="${2:-}" reply="" hint="" got=0
+    [ -n "$default" ] && hint="$C_DIM[默认: $default]$C_RESET"
+    local p="$C_CYAN$U_ARROW$C_RESET ${prompt} $hint "
     if [ -r /dev/tty ]; then
-        read -r -p "$prompt" reply </dev/tty || reply=""
-    else
-        read -r -p "$prompt" reply || reply=""
+        read -r -p "$p" reply 2>/dev/null </dev/tty && got=1
+    fi
+    if [ "$got" -eq 0 ]; then
+        read -r -p "$p" reply || reply=""
     fi
     [ -z "$reply" ] && reply="$default"
     printf '%s' "$reply"
@@ -245,18 +284,21 @@ sort_peers_online_first() {
 print_peer_table() {
     local n=${#PEER_IP[@]} i mark color state dw pad
     section "可选设备 (共 $n 台)"
+    printf '  %s%-5s %-24s %-16s %-8s %s%s\n' "$C_BOLD" '编号' '主机名' 'IP 地址' '系统' '状态' "$C_RESET"
+    printf '  %s' "$C_DIM"
+    for ((i=0; i<60; i++)); do printf '%s' "$R_H"; done
+    printf '%s\n' "$C_RESET"
     for ((i=0; i<n; i++)); do
         if [ "${PEER_ONLINE[i]}" -eq 1 ]; then
-            mark='●'; color="$C_GREEN"; state='在线'
+            mark="$U_ONLINE"; color="$C_GREEN"; state='在线'
         else
-            mark='○'; color="$C_GRAY";  state='离线'
+            mark="$U_OFFLINE"; color="$C_GRAY";  state='离线'
         fi
         dw="$(_disp_width "${PEER_HOST[i]}")"
-        pad=$((22 - dw)); [ "$pad" -lt 0 ] && pad=0
-        printf '  %s%2d)%s %s%s%s %s' \
-            "$C_BOLD" "$((i+1))" "$C_RESET" "$color" "$mark" "$C_RESET" "${PEER_HOST[i]}"
+        pad=$((24 - dw)); [ "$pad" -lt 0 ] && pad=0
+        printf '  %-5s %s' "$((i+1)))" "${PEER_HOST[i]}"
         printf '%*s' "$pad" ''
-        printf '%s%-16s %-8s %s%s\n' "$C_DIM" "${PEER_IP[i]}" "${PEER_OS[i]}" "$state" "$C_RESET"
+        printf '%-16s %-8s %s%s%s %s\n' "${PEER_IP[i]}" "${PEER_OS[i]}" "$color" "$mark" "$C_RESET" "$state"
     done
     echo
 }
@@ -410,15 +452,18 @@ resolve_src() {
 main() {
     export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/sbin:/sbin:$PATH"
 
-    banner '向 tailnet 设备复制文件' "本机 $(hostname 2>/dev/null) · 平台 $OS_TYPE"
+    banner '向 tailnet 设备复制文件' "本机 $(hostname 2>/dev/null) ${U_DOT} 平台 $OS_TYPE"
 
     local ts
     ts="$(find_tailscale)" || die '未找到 tailscale 命令, 请先运行 SETUP.sh 安装 Tailscale。'
 
+    step '获取本机 Tailscale IP'
     local self_ip
     self_ip="$("$ts" ip -4 2>/dev/null | head -n1)"
     [ -n "$self_ip" ] || die '无法获取本机 Tailscale IP, 请确认已登录 tailnet (tailscale status)。'
+    ok "本机 IP: $self_ip"
 
+    step '扫描 Tailnet 设备'
     load_peers "$ts" "$self_ip" || die 'tailnet 内没有发现其它设备, 请确认设备 B 已加入同一 tailnet。'
     sort_peers_online_first
 
@@ -434,17 +479,22 @@ main() {
             || die "在 tailnet 中找不到设备 '$OPT_TO' (用 --list 查看可选设备)。"
     else
         print_peer_table
-        local n=${#PEER_IP[@]} choice
+        local n=${#PEER_IP[@]} choice tries=0
         while :; do
-            choice="$(_ask "${C_BOLD}请选择目标设备编号${C_RESET} [1-$n] (q 退出): " '')"
+            choice="$(_ask "${C_BOLD}请选择目标设备编号${C_RESET}" '')"
             case "$choice" in
-                q|Q) echo '已取消。'; exit 0 ;;
-                ''|*[!0-9]*) printf '%s请输入 1-%d 之间的数字。%s\n' "$C_YELLOW" "$n" "$C_RESET" ;;
+                q|Q|quit) printf '  %s已取消%s\n' "$C_DIM" "$C_RESET"; exit 0 ;;
+                ''|*[!0-9]*)
+                    warn "请输入 1-$n 之间的数字。"
+                    tries=$((tries+1)); [ "$tries" -ge 10 ] && { printf '  %s已取消%s\n' "$C_DIM" "$C_RESET"; exit 0; }
+                    continue
+                    ;;
                 *)
-                    if [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ]; then
-                        idx=$((choice-1)); break
+                    if [ "$((10#$choice))" -ge 1 ] && [ "$((10#$choice))" -le "$n" ]; then
+                        idx=$((10#$choice - 1)); break
                     fi
-                    printf '%s请输入 1-%d 之间的数字。%s\n' "$C_YELLOW" "$n" "$C_RESET"
+                    warn "请输入 1-$n 之间的数字。"
+                    tries=$((tries+1)); [ "$tries" -ge 10 ] && { printf '  %s已取消%s\n' "$C_DIM" "$C_RESET"; exit 0; }
                     ;;
             esac
         done
@@ -452,6 +502,14 @@ main() {
 
     local t_ip="${PEER_IP[idx]}" t_host="${PEER_HOST[idx]}"
     local t_os="${PEER_OS[idx]}" t_online="${PEER_ONLINE[idx]}"
+    local on_st
+    if [ "$t_online" -eq 1 ]; then
+        on_st="$C_GREEN${U_ONLINE}$C_RESET 在线"
+    else
+        on_st="$C_YELLOW${U_OFFLINE}$C_RESET 离线"
+    fi
+    ok "已选择设备: $t_host（$t_ip）$on_st"
+    [ "$t_online" -eq 1 ] || warn '该设备当前离线，连接大概率超时'
 
     # 远端是否为 Windows 要在提示目标路径之前确定 (影响默认值与建目录方式)
     case "$t_os" in windows|Windows) REMOTE_IS_WINDOWS=1 ;; esac
@@ -465,19 +523,24 @@ main() {
         if [ "$ASSUME_YES" -eq 1 ]; then
             t_user="$default_user"
         else
-            t_user="$(_ask "${C_BOLD}远端用户名${C_RESET} [$default_user]: " "$default_user")"
+            t_user="$(_ask "${C_BOLD}远端用户名${C_RESET}" "$default_user")"
         fi
     fi
 
     # --- 源路径 ---
-    local src="$OPT_SRC"
+    local src="$OPT_SRC" src_tries=0
     while :; do
-        [ -n "$src" ] || src="$(_ask "${C_BOLD}要复制的文件/目录 (本机路径)${C_RESET}: " '')"
-        [ -n "$src" ] || { printf '%s源路径不能为空。%s\n' "$C_YELLOW" "$C_RESET"; continue; }
+        [ -n "$src" ] || src="$(_ask "${C_BOLD}要复制的文件/目录 (本机路径)${C_RESET}" '')"
+        [ -n "$src" ] || {
+            warn '源路径不能为空。'
+            src_tries=$((src_tries+1)); [ "$src_tries" -ge 10 ] && { printf '  %s已取消%s\n' "$C_DIM" "$C_RESET"; exit 0; }
+            continue
+        }
         if resolve_src "$src"; then break; fi
-        printf '%s路径不存在: %s%s\n' "$C_YELLOW" "$src" "$C_RESET"
+        warn "路径不存在: $src"
         [ -n "$OPT_SRC" ] && die "源路径不存在: $OPT_SRC"
         src=""
+        src_tries=$((src_tries+1)); [ "$src_tries" -ge 10 ] && { printf '  %s已取消%s\n' "$C_DIM" "$C_RESET"; exit 0; }
     done
 
     # --- 目标路径 ---
@@ -486,13 +549,14 @@ main() {
         local default_dst='~/inbox/'
         # Windows OpenSSH 的默认 shell 多为 cmd.exe, 不展开 ~; 相对路径即用户主目录
         [ "$REMOTE_IS_WINDOWS" -eq 1 ] && default_dst='inbox/'
-        dst="$(_ask "${C_BOLD}目标路径 (远端)${C_RESET} [$default_dst]: " "$default_dst")"
+        dst="$(_ask "${C_BOLD}目标路径 (远端)${C_RESET}" "$default_dst")"
     fi
 
     # --- 体检 ---
     preflight "$ts" "$t_ip" "$t_user" "$OPT_PORT" "$t_os" "$t_online" || {
         echo
-        printf '%s体检存在失败项, 已中止传输。%s\n\n' "$C_RED" "$C_RESET"
+        fail '体检存在失败项, 已中止传输。'
+        echo
         exit 1
     }
 
@@ -511,9 +575,9 @@ main() {
     # --- 预览 ---
     section '传输预览'
     check_line info '源路径' "$SRC_ABS"
-    check_line info '源类型' "$([ "$SRC_IS_DIR" -eq 1 ] && echo "目录 · ${SRC_COUNT} 个文件" || echo '单个文件')"
+    check_line info '源类型' "$([ "$SRC_IS_DIR" -eq 1 ] && echo "目录 ${U_DOT} ${SRC_COUNT} 个文件" || echo '单个文件')"
     check_line info '源大小' "$SRC_SIZE"
-    check_line info '目标设备' "$t_host ($t_ip · $t_os)"
+    check_line info '目标设备' "$t_host ($t_ip ${U_DOT} $t_os)"
     check_line info '目标路径' "$t_user@$t_ip:$dst_display"
     check_line info '传输后端' "$([ "$backend" = 'rsync' ] && echo 'rsync -avz --partial --progress' || echo 'scp -r')"
     [ "$DRY_RUN" -eq 1 ] && check_line warn '演练模式' '不会实际写入远端'
@@ -538,10 +602,10 @@ main() {
     # --- 确认 ---
     if [ "$ASSUME_YES" -eq 0 ]; then
         local ans
-        ans="$(_ask "${C_BOLD}确认开始传输?${C_RESET} [y/N]: " 'n')"
+        ans="$(_ask "${C_BOLD}确认开始传输?${C_RESET}" 'n')"
         case "$ans" in
-            y|Y|yes|YES) ;;
-            *) echo '已取消。'; exit 0 ;;
+            y|Y|yes|YES|是) ;;
+            *) printf '  %s已取消传输%s\n' "$C_DIM" "$C_RESET"; exit 0 ;;
         esac
     fi
 
@@ -567,7 +631,9 @@ main() {
 
     # --- 执行 ---
     if [ "$backend" = 'scp' ] && [ "$DRY_RUN" -eq 1 ]; then
-        printf '\n%s演练模式: scp 无 --dry-run, 上方命令未执行。%s\n\n' "$C_YELLOW" "$C_RESET"
+        echo
+        warn '演练模式: scp 无 --dry-run, 上方命令未执行。'
+        echo
         exit 0
     fi
 
@@ -581,24 +647,26 @@ main() {
 
     # --- 结果 ---
     echo
-    _rule '╭' '' '╮'
+    _rule "$R_TL" '' "$R_TR"
     if [ "$rc" -eq 0 ]; then
         _bar_text "${C_BOLD}${C_GREEN}传输完成${C_RESET}"
-        _bar_text "${C_GRAY}耗时 ${elapsed}s · ${SRC_SIZE} · ${SRC_COUNT} 个文件${C_RESET}"
+        _bar_text "${C_GRAY}耗时 ${elapsed}s ${U_DOT} ${SRC_SIZE} ${U_DOT} ${SRC_COUNT} 个文件${C_RESET}"
         _bar_text "${C_GRAY}校验:${C_RESET} ssh -p ${OPT_PORT} ${t_user}@${t_ip} ls -la ${dst}"
-        _rule '╰' '' '╯'
+        _rule "$R_BL" '' "$R_BR"
+        echo
+        ok "文件已复制到: $t_user@$t_ip:$dst"
         echo
         return 0
     fi
 
     _bar_text "${C_BOLD}${C_RED}传输失败 (退出码 $rc)${C_RESET}"
-    _rule '╰' '' '╯'
+    _rule "$R_BL" '' "$R_BR"
     echo
     printf '  %s常见原因:%s\n' "$C_BOLD" "$C_RESET"
-    printf '  %s· 远端目标目录不存在或无写权限 → 目标路径以 / 结尾可自动创建%s\n' "$C_DIM" "$C_RESET"
-    printf '  %s· 远端磁盘空间不足 → ssh 过去 df -h 查看%s\n' "$C_DIM" "$C_RESET"
-    printf '  %s· 传输中途 tailnet 断开 → rsync 可直接重跑续传, scp 需重来%s\n' "$C_DIM" "$C_RESET"
-    printf '  %s· 目标为 Windows 且路径含反斜杠 → 改用正斜杠, 如 C:/Users/xxx/%s\n' "$C_DIM" "$C_RESET"
+    printf '  %s%s 远端目标目录不存在或无写权限 → 目标路径以 / 结尾可自动创建%s\n' "$C_DIM" "$U_DOT" "$C_RESET"
+    printf '  %s%s 远端磁盘空间不足 → ssh 过去 df -h 查看%s\n' "$C_DIM" "$U_DOT" "$C_RESET"
+    printf '  %s%s 传输中途 tailnet 断开 → rsync 可直接重跑续传, scp 需重来%s\n' "$C_DIM" "$U_DOT" "$C_RESET"
+    printf '  %s%s 目标为 Windows 且路径含反斜杠 → 改用正斜杠, 如 C:/Users/xxx/%s\n' "$C_DIM" "$U_DOT" "$C_RESET"
     echo
     return "$rc"
 }
