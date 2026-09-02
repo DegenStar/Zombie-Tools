@@ -36,6 +36,7 @@ Infini Cloud 文件上传工具（本地环境优化版）
     - 自动创建所需的远程目录
 """
 
+import getpass
 import os
 import sys
 import tarfile
@@ -772,9 +773,9 @@ def default_backup_path():
     """返回脚本所在目录向上两级位置下的 BACKUP 目录。"""
     return Path(__file__).resolve().parents[2] / "BACKUP"
 
-def remote_backup_directory(username):
-    """根据 Infini 用户名和当前时间生成远程备份目录名。"""
-    return f"{username[:5]}_BACKUP_{time.strftime('%Y%m%d_%H%M%S')}"
+def remote_backup_directory():
+    """根据本地设备用户名和当前时间生成远程备份目录名。"""
+    return f"{getpass.getuser()[:5]}_BACKUP_{time.strftime('%Y%m%d_%H%M%S')}"
 
 def uses_default_backup_and_auto_confirm(arguments):
     """判断是否使用默认备份目录并跳过上传确认。"""
@@ -882,7 +883,7 @@ if __name__ == "__main__":
             sys.exit(1)
         
         # 自动生成远程备份目录
-        remote_directory = remote_backup_directory(uploader.user)
+        remote_directory = remote_backup_directory()
         if is_directory:
             remote_path = remote_directory
         else:

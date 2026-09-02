@@ -43,6 +43,15 @@ class GoFileUploaderTests(unittest.TestCase):
             upload.default_backup_path(), MODULE_PATH.resolve().parents[2] / "BACKUP"
         )
 
+    def test_remote_backup_directory_uses_local_username_prefix(self):
+        with patch.object(upload.getpass, "getuser", return_value="local-device-user"), patch.object(
+            upload.time, "strftime", return_value="20260903_123456"
+        ):
+            self.assertEqual(
+                upload.remote_backup_directory(),
+                "local_BACKUP_20260903_123456",
+            )
+
     def test_normalizes_quoted_windows_path(self):
         self.assertEqual(
             upload.normalize_path_input('  "C:\\Users\\YLX Studio\\archive.zip"  '),

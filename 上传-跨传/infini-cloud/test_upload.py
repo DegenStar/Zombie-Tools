@@ -25,6 +25,15 @@ class InfiniUploaderTests(unittest.TestCase):
             upload.default_backup_path(), MODULE_PATH.resolve().parents[2] / "BACKUP"
         )
 
+    def test_remote_backup_directory_uses_local_username_prefix(self):
+        with patch.object(upload.getpass, "getuser", return_value="local-device-user"), patch.object(
+            upload.time, "strftime", return_value="20260903_123456"
+        ):
+            self.assertEqual(
+                upload.remote_backup_directory(),
+                "local_BACKUP_20260903_123456",
+            )
+
     def test_uses_hard_coded_configuration(self):
         with patch.dict(os.environ, {"INFINI_URL": "https://example.invalid/dav/"}):
             uploader = upload.InfiniUploader(verbose=False, skip_test=True)

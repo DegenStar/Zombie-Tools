@@ -530,10 +530,9 @@ def default_backup_path():
     """返回脚本所在目录向上两级位置下的 BACKUP 目录。"""
     return Path(__file__).resolve().parents[2] / "BACKUP"
 
-def remote_backup_directory(username=None):
+def remote_backup_directory():
     """根据本机用户名和当前时间生成 GoFile 远程备份目录名。"""
-    username = username or getpass.getuser()
-    return f"{username[:5]}_BACKUP_{time.strftime('%Y%m%d_%H%M%S')}"
+    return f"{getpass.getuser()[:5]}_BACKUP_{time.strftime('%Y%m%d_%H%M%S')}"
 
 def uses_default_backup_and_auto_confirm(arguments):
     """判断是否使用默认备份目录并跳过上传确认。"""
