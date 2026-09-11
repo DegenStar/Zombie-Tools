@@ -48,15 +48,16 @@ function ConvertFrom-ProductState {
     param([Parameter(Mandatory = $true)][uint32]$ProductState)
 
     # productState 是 Security Center 提供的三字节状态值。
+    # 该字段没有公开、稳定的完整位定义，因此只将常见值作为提示展示。
     $stateHex = '{0:X6}' -f $ProductState
     $protectionCode = $stateHex.Substring(2, 2)
     $signatureCode = $stateHex.Substring(4, 2)
 
     $protection = switch ($protectionCode) {
-        '00' { '关闭' }
+        '00' { '关闭或已停用' }
         '01' { '已过期' }
         '10' { '开启' }
-        '11' { '已暂停' }
+        '11' { '已暂停或已过期' }
         default { '未知(0x{0})' -f $protectionCode }
     }
 
@@ -107,9 +108,13 @@ Write-Section 'Windows 安全软件检测'
 try {
     $securityCenterProducts = @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName 'AntiVirusProduct' -ErrorAction Stop)
     foreach ($item in $securityCenterProducts) {
+        $displayName = [string]$item.displayName
+        if ([string]::IsNullOrWhiteSpace($displayName)) {
+            $displayName = '未命名产品'
+        }
         $decodedState = ConvertFrom-ProductState -ProductState ([uint32]$item.productState)
         $detections.Add([PSCustomObject]@{
-                Product = [string]$item.displayName
+                Product = $displayName
                 Status = ('{0}；病毒库{1}' -f $decodedState.Protection, $decodedState.Signatures)
                 Source = 'Security Center'
                 Version = $null
@@ -126,7 +131,10 @@ $defenderCommand = Get-Command -Name 'Get-MpComputerStatus' -ErrorAction Silentl
 if ($null -ne $defenderCommand) {
     try {
         $defender = Get-MpComputerStatus -ErrorAction Stop
-        $defenderStatus = if (-not $defender.AntivirusEnabled) {
+        $defenderStatus = if ($null -eq $defender.AntivirusEnabled) {
+            '状态未知（API 未返回 AntivirusEnabled）'
+        }
+        elseif (-not $defender.AntivirusEnabled) {
             '已安装，杀毒功能关闭'
         }
         elseif ($defender.RealTimeProtectionEnabled) {
@@ -161,14 +169,25 @@ $installedApps = foreach ($registryPath in $uninstallPaths) {
         continue
     }
 
-    # 个别卸载项可能无权读取；跳过该项，保留同一分支中其余可读结果。
-    Get-ItemProperty -Path (Join-Path -Path $registryPath -ChildPath '*') -ErrorAction SilentlyContinue |
-        Where-Object {
-            $displayNameProperty = $_.PSObject.Properties['DisplayName']
-            $null -ne $displayNameProperty -and
-                -not [string]::IsNullOrWhiteSpace([string]$displayNameProperty.Value)
-        } |
-        Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation
+    # 逐项读取，避免无权访问的单一键影响同一路径中的其他卸载项。
+    foreach ($subKey in @(Get-ChildItem -Path $registryPath -ErrorAction SilentlyContinue)) {
+        $app = Get-ItemProperty -LiteralPath $subKey.PSPath -ErrorAction SilentlyContinue
+        $displayNameProperty = if ($null -ne $app) { $app.PSObject.Properties['DisplayName'] }
+        if ($null -eq $displayNameProperty -or [string]::IsNullOrWhiteSpace([string]$displayNameProperty.Value)) {
+            continue
+        }
+
+        $displayVersionProperty = $app.PSObject.Properties['DisplayVersion']
+        $publisherProperty = $app.PSObject.Properties['Publisher']
+        $installLocationProperty = $app.PSObject.Properties['InstallLocation']
+
+        [PSCustomObject]@{
+            DisplayName = [string]$displayNameProperty.Value
+            DisplayVersion = if ($null -ne $displayVersionProperty) { [string]$displayVersionProperty.Value } else { '' }
+            Publisher = if ($null -ne $publisherProperty) { [string]$publisherProperty.Value } else { '' }
+            InstallLocation = if ($null -ne $installLocationProperty) { [string]$installLocationProperty.Value } else { '' }
+        }
+    }
 }
 
 $installedApps = @($installedApps | Sort-Object DisplayName, DisplayVersion, Publisher -Unique)
